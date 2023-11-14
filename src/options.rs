@@ -6,8 +6,6 @@ use thiserror::Error;
 pub enum ArgParseError {
     #[error("Target file not found")]
     FileNotFound,
-    #[error("Invalid bit value provided")]
-    InvalidBitness,
 }
 
 /// QSocket toolkit options.
@@ -16,13 +14,25 @@ pub enum ArgParseError {
 #[command(version = "1.0.0")]
 #[command(about = "x86 Deoptimizer.", long_about = None)]
 pub struct Options {
-    /// target x86 binary file.
+    /// target x86 binary file name.
     #[arg(long, short = 'f', default_value_t = String::new())]
     pub file: String,
 
+    /// assembler formatter syntax (nasm/masm/intel/gas).
+    #[arg(long, short = 's', default_value_t = String::from("keystone"))]
+    pub syntax: String,
+
     /// bitness of the binary file (32/64).
     #[arg(long, short = 'm', default_value_t = 32)]
-    pub mode: u8,
+    pub mode: u32,
+
+    /// deoptimization frequency.
+    #[arg(long, short = 'F', default_value_t = 0.5)]
+    pub freq: f64,
+
+    /// Immidiate instruction partitioning length.
+    #[arg(long, default_value_t = 1)]
+    pub ipl: u32,
 
     /// verbose output mode.
     #[arg(long, short = 'v')]
