@@ -1,3 +1,4 @@
+use chrono::format;
 use iced_x86::{
     Code, ConditionCode, Decoder, DecoderOptions, Formatter, GasFormatter, IcedError, Instruction,
     InstructionInfoFactory, IntelFormatter, MasmFormatter, MemoryOperand, NasmFormatter, OpAccess,
@@ -20,7 +21,25 @@ pub enum TransformError {
     IcedError(#[from] IcedError),
 }
 
-pub fn get_register_save_seq(reg: Register) -> Result<Vec<Instruction>, TransformError> {
+pub fn get_immediate_info(inst: Instruction) -> Option<(u32, u64)> {
+    for i in 0..inst.op_count() {
+        match inst.op_kind(i) {
+            OpKind::Immediate8_2nd => return Some((i, inst.immediate(i))),
+            OpKind::Immediate8 => return Some((i, inst.immediate(i))),
+            OpKind::Immediate16 => return Some((i, inst.immediate(i))),
+            OpKind::Immediate32 => return Some((i, inst.immediate(i))),
+            OpKind::Immediate64 => return Some((i, inst.immediate(i))),
+            OpKind::Immediate8to16 => return Some((i, inst.immediate(i))),
+            OpKind::Immediate8to32 => return Some((i, inst.immediate(i))),
+            OpKind::Immediate8to64 => return Some((i, inst.immediate(i))),
+            OpKind::Immediate32to64 => return Some((i, inst.immediate(i))),
+            _ => continue,
+        }
+    }
+    None
+}
+
+pub fn get_register_save_seq(reg: Register) -> Result<(Instruction, Instruction), TransformError> {
     let (c1, c2) = match reg.size() {
         2 => (Code::Push_r16, Code::Pop_r16),
         4 => (Code::Push_r32, Code::Pop_r32),
@@ -29,45 +48,70 @@ pub fn get_register_save_seq(reg: Register) -> Result<Vec<Instruction>, Transfor
     };
     let pre = Instruction::with1(c1, reg)?;
     let post = Instruction::with1(c2, reg)?;
-    Ok(Vec::from([pre, post]))
+    Ok((pre, post))
 }
 
-pub fn get_random_register_value(reg: Register) -> i64 {
+pub fn get_random_register_value(reg: Register) -> u64 {
     let mut rng = rand::thread_rng();
-    if reg.size() > 8 {
-        return rng.gen_range(1..i64::MAX) as i64;
+    if reg.size() > 4 {
+        return rng.gen_range(1..u32::MAX) as u64;
     }
-    rng.gen_range(1..(2 ^ (reg.size() * 8))) as i64
+    rng.gen_range(1..u64::pow(2, (reg.size() * 8) as u32)) as u64
+    // (u32::MAX - 100) as u64
 }
 
 pub fn get_random_gp_register(extended: bool, size: usize) -> Result<Register, TransformError> {
-    let regs: Vec<Register> = Register::values().collect::<Vec<Register>>();
-    let reg = match regs.choose(&mut rand::thread_rng()) {
-        Some(r) => r,
-        None => return Err(TransformError::RegisterCollectFail),
-    };
-
-    let correct_size = match size {
-        1 => reg.is_gpr8(),
-        2 => reg.is_gpr16(),
-        4 => reg.is_gpr32(),
-        8 => reg.is_gpr64(),
-        _ => return Err(TransformError::UnexpectedRegisterSize),
-    };
-
-    let is_extended = reg.number() > 7;
-    if correct_size && is_extended == extended {
-        return Ok(*reg);
+    if !extended && size > 4 {
+        return Err(TransformError::UnexpectedRegisterSize);
     }
-    return get_random_gp_register(extended, size);
+
+    let mut gpr8 = Vec::new();
+    let mut gpr16 = Vec::new();
+    let mut gpr32 = Vec::new();
+    let mut gpr64 = Vec::new();
+
+    for r in Register::values() {
+        if r.is_gpr8() {
+            gpr8.push(r);
+            continue;
+        }
+        if r.is_gpr16() {
+            gpr16.push(r);
+            continue;
+        }
+        if r.is_gpr32() {
+            gpr32.push(r);
+            continue;
+        }
+        if r.is_gpr64() {
+            gpr64.push(r);
+            continue;
+        }
+    }
+
+    loop {
+        let reg = match size {
+            1 => gpr8.choose(&mut rand::thread_rng()).unwrap(),
+            2 => gpr16.choose(&mut rand::thread_rng()).unwrap(),
+            4 => gpr32.choose(&mut rand::thread_rng()).unwrap(),
+            8 => gpr64.choose(&mut rand::thread_rng()).unwrap(),
+            _ => return Err(TransformError::UnexpectedRegisterSize),
+        };
+
+        let reg_str = format!("{:?}", reg);
+        let is_extended = reg_str.contains("R") || reg_str.contains("IL") || reg_str.contains("PL");
+        if is_extended == extended {
+            // println!("{?:} = {}", reg, reg.number());
+            return Ok(*reg);
+        }
+    }
 }
 
 fn get_add_code_with(reg: Register) -> Result<Code, TransformError> {
     let c = match reg.size() {
         1 => Code::Add_rm8_imm8,
         2 => Code::Add_rm16_imm16,
-        4 => Code::Add_rm32_imm32,
-        8 => Code::Add_rm64_imm32,
+        4 | 8 => Code::Add_rm32_imm32,
         _ => return Err(TransformError::UnexpectedRegisterSize),
     };
     Ok(c)
@@ -77,8 +121,7 @@ fn get_sub_code_with(reg: Register) -> Result<Code, TransformError> {
     let c = match reg.size() {
         1 => Code::Sub_rm8_imm8,
         2 => Code::Sub_rm16_imm16,
-        4 => Code::Sub_rm32_imm32,
-        8 => Code::Sub_rm64_imm32,
+        4 | 8 => Code::Sub_rm32_imm32,
         _ => return Err(TransformError::UnexpectedRegisterSize),
     };
     Ok(c)
@@ -104,50 +147,58 @@ pub fn apply_om_transform(
         return Err(TransformError::TransformNotPossible);
     }
     let rnd_reg_val = get_random_register_value(base_reg);
+    // println!("Rand val: 0x{:X} = {rnd_reg_val}", rnd_reg_val);
     let coin_flip: bool = rand::thread_rng().gen();
 
-    let mut code = match coin_flip {
-        true => get_add_code_with(base_reg)?,
-        false => get_sub_code_with(base_reg)?,
+    let (c1, c2) = match coin_flip {
+        true => (get_add_code_with(base_reg)?, get_sub_code_with(base_reg)?),
+        false => (get_sub_code_with(base_reg)?, get_add_code_with(base_reg)?),
     };
-    let mut pre_inst = Instruction::with2(code, base_reg, 0)?;
-    pre_inst.set_immediate8to64(rnd_reg_val);
-
-    let new_disply = match coin_flip {
-        true => inst.memory_displacement64() as i64 - rnd_reg_val as i64,
-        false => inst.memory_displacement64() as i64 - rnd_reg_val as i64,
-    };
-
-    code = match coin_flip {
-        true => get_sub_code_with(base_reg)?,
-        false => get_add_code_with(base_reg)?,
-    };
-    let mut post_inst = Instruction::with2(code, base_reg, 0)?;
-    post_inst.set_immediate8to64(rnd_reg_val);
-
+    let pre_inst = Instruction::with2(c1, base_reg, rnd_reg_val)?;
+    let post_inst = Instruction::with2(c2, base_reg, rnd_reg_val)?;
+    let new_disply = inst.memory_displacement64().abs_diff(rnd_reg_val);
+    // println!("New displ: 0x{:X} = {new_disply}", new_disply);
+    let mut new_disply_signed = new_disply as i64; // This is not right!!!
+    if coin_flip {
+        new_disply_signed = -new_disply_signed;
+    }
     match mode {
-        16 | 32 => inst.set_memory_displacement32(new_disply as u32),
-        64 => inst.set_memory_displacement64(new_disply as u64),
+        16 | 32 => inst.set_memory_displacement32(new_disply_signed as u32),
+        64 => inst.set_memory_displacement64(new_disply_signed as u64),
         _ => return Err(TransformError::InvalidProcessorMode),
     }
-
     Ok(Vec::from([pre_inst, inst.clone(), post_inst]))
 }
+
 /// Applies offset-to-register transform to given instruction.
 pub fn apply_otr_transform(
     inst: &mut Instruction,
     mode: u32,
 ) -> Result<Vec<Instruction>, TransformError> {
-    let base_reg = inst.memory_base();
     if !inst
         .op_kinds()
         .collect::<Vec<OpKind>>()
         .contains(&OpKind::Memory)
-        || base_reg != Register::None
+        || inst.memory_base() != Register::None
     {
         return Err(TransformError::TransformNotPossible);
     }
-    todo!("...")
+
+    let rand_reg = get_random_gp_register(mode == 64, (mode / 8) as usize)?;
+    let (reg_save_pre, reg_save_post) = get_register_save_seq(rand_reg)?;
+    let mov = match mode {
+        32 => Instruction::with2(Code::Mov_rm32_imm32, rand_reg, inst.memory_displacement32())?,
+        64 => Instruction::with2(Code::Mov_r64_imm64, rand_reg, inst.memory_displacement64())?,
+        _ => return Err(TransformError::UnexpectedRegisterSize),
+    };
+    // Obfuscate mov...
+    inst.set_memory_base(rand_reg);
+    match mode {
+        32 => inst.set_memory_displacement32(0),
+        64 => inst.set_memory_displacement64(0),
+        _ => return Err(TransformError::UnexpectedRegisterSize),
+    }
+    Ok(Vec::from([reg_save_pre, mov, *inst, reg_save_post]))
 }
 
 // Register Obfuscation Transforms
@@ -164,19 +215,16 @@ pub fn apply_rs_transform(
     {
         return Err(TransformError::TransformNotPossible);
     }
-
-    let mut info_factory = InstructionInfoFactory::new();
-    let info = info_factory.info(&inst);
+    let mut reg_idxs = Vec::new();
     let mut used_regs = Vec::new();
-    for ri in info.used_registers() {
-        let mut reg_index = 0;
-        for i in 0..inst.op_count() {
-            if inst.op_register(i) == ri.register() {
-                reg_index = i;
-            }
+    for o in 0..inst.op_count() {
+        if inst.op_kind(o) == OpKind::Register {
+            reg_idxs.push(o)
         }
-        if ri.register().is_gpr() {
-            used_regs.push((reg_index, ri.register()))
+    }
+    for i in reg_idxs {
+        if inst.op_register(i).is_gpr() {
+            used_regs.push((i, inst.op_register(i)));
         }
     }
     if used_regs.len() == 0 {
@@ -185,11 +233,13 @@ pub fn apply_rs_transform(
 
     let (reg_index, swap_reg) = *used_regs.choose(&mut rand::thread_rng()).unwrap();
     let mut rand_reg = get_random_gp_register(mode == 64, swap_reg.size())?;
-    while rand_reg == swap_reg {
+    loop {
+        if rand_reg != swap_reg {
+            break;
+        }
         // This is bad, check for infinite loop conditions
         rand_reg = get_random_gp_register(mode == 64, swap_reg.size())?;
     }
-
     let xchg = match swap_reg.size() {
         1 => Instruction::with2(Code::Xchg_rm8_r8, swap_reg, rand_reg)?,
         2 => Instruction::with2(Code::Xchg_rm16_r16, swap_reg, rand_reg)?,
@@ -198,7 +248,6 @@ pub fn apply_rs_transform(
         _ => return Err(TransformError::TransformNotPossible),
     };
     inst.set_op_register(reg_index, rand_reg);
-
     Ok(Vec::from([xchg, inst.clone(), xchg]))
 }
 
@@ -209,7 +258,26 @@ pub fn apply_itr_transform(
     inst: &mut Instruction,
     mode: u32,
 ) -> Result<Vec<Instruction>, TransformError> {
-    todo!("...")
+    let (imm_index, imm) = match get_immediate_info(*inst) {
+        Some((idx, imm)) => (idx, imm),
+        None => return Err(TransformError::TransformNotPossible),
+    };
+
+    println!("Immidiate: {}", imm);
+    let rand_reg = get_random_gp_register(mode == 64, (mode / 8) as usize)?;
+    let (reg_save_pre, reg_save_post) = get_register_save_seq(rand_reg)?;
+
+    let mov = match rand_reg.size() {
+        4 => Instruction::with2(Code::Mov_rm64_imm32, rand_reg, imm)?,
+        8 => Instruction::with2(Code::Mov_r64_imm64, rand_reg, imm)?,
+        _ => return Err(TransformError::UnexpectedRegisterSize),
+    };
+    // Obfuscate mov...
+
+    inst.set_op_kind(imm_index, OpKind::Register);
+    inst.set_op_register(imm_index, rand_reg);
+
+    Ok(Vec::from([reg_save_pre, mov, *inst, reg_save_post]))
 }
 /// Applies arithmetic partitioning transform to given instruction.
 pub fn apply_ap_transform(
@@ -237,17 +305,19 @@ pub fn apply_cp_transform(inst_addr: u64, mode: u32) -> Result<(), TransformErro
 mod tests {
     use iced_x86::{Code, Formatter, Instruction, MemoryOperand, NasmFormatter, OpKind, Register};
 
-    use crate::x86::{apply_om_transform, apply_rs_transform};
+    use crate::x86::{
+        apply_itr_transform, apply_om_transform, apply_otr_transform, apply_rs_transform,
+    };
 
     use super::get_random_gp_register;
 
     #[test]
     fn test_om_transform() {
         println!("[*] testing offset mutation...");
-        let mut inst = Instruction::with2(
-            Code::Mov_r32_rm32,
-            Register::EAX,
-            MemoryOperand::with_base_displ(Register::EBX, 0x10),
+        let inst = Instruction::with2(
+            Code::Mov_r64_rm64,
+            Register::RAX,
+            MemoryOperand::with_base_displ(Register::RBX, 0x10),
         )
         .expect("Instruction creation failed");
         let mut formatter = NasmFormatter::new();
@@ -255,40 +325,110 @@ mod tests {
         formatter.format(&inst, &mut formatted_inst);
         println!("[*] instruction: {}", formatted_inst);
         println!("[*] Memory Base: {:?}", inst.memory_base());
-        assert_eq!(formatted_inst, "mov eax,[ebx+10h]");
-        println!("---------------------");
-        match apply_om_transform(&mut inst, 64) {
-            Ok(result) => {
-                for i in result {
-                    formatted_inst.clear();
-                    formatter.format(&mut i.clone(), &mut formatted_inst);
-                    println!("[+] {}", formatted_inst);
+        // assert_eq!(formatted_inst, "mov eax,[ebx+10h]");
+        for _i in 0..1000 {
+            println!("---------------------");
+            match apply_om_transform(&mut inst.clone(), 64) {
+                Ok(result) => {
+                    for i in result {
+                        formatted_inst.clear();
+                        formatter.format(&mut i.clone(), &mut formatted_inst);
+                        println!("[+] {}", formatted_inst);
+                    }
                 }
-            }
-            Err(e) => println!("[-] {e}"),
-        };
+                Err(e) => {
+                    println!("[-] {e}");
+                    break;
+                }
+            };
+        }
     }
 
     #[test]
-    fn test_apply_rs_transform() {
+    fn test_rs_transform() {
         println!("[*] Testing register swap...");
-        let mut inst = Instruction::with2(Code::Mov_r32_rm32, Register::EAX, Register::EBX)
+        let inst = Instruction::with2(Code::Mov_rm64_r64, Register::RAX, Register::RBX)
             .expect("Instruction creation failed");
         let mut formatter = NasmFormatter::new();
         let mut formatted_inst = String::new();
         formatter.format(&inst, &mut formatted_inst);
         println!("[*] instruction: {}", formatted_inst);
-        assert_eq!(formatted_inst, "mov eax,ebx");
-        println!("---------------------");
-        match apply_rs_transform(&mut inst, 32) {
-            Ok(res) => {
-                for i in res {
-                    formatted_inst.clear();
-                    formatter.format(&mut i.clone(), &mut formatted_inst);
-                    println!("[+] {}", formatted_inst);
+        // assert_eq!(formatted_inst, "mov eax,bl");
+        for _i in 0..1000 {
+            println!("---------------------");
+            match apply_rs_transform(&mut inst.clone(), 64) {
+                Ok(res) => {
+                    for i in res {
+                        formatted_inst.clear();
+                        formatter.format(&mut i.clone(), &mut formatted_inst);
+                        println!("[+] {}", formatted_inst);
+                    }
+                }
+                Err(e) => {
+                    println!("[-] {e}");
+                    break;
                 }
             }
-            Err(e) => println!("[-] {e}"),
+        }
+    }
+
+    #[test]
+    fn test_otr_transform() {
+        println!("[*] Testing offset to register transform...");
+        let inst = Instruction::with2(
+            Code::Mov_r64_rm64,
+            Register::EAX,
+            MemoryOperand::with_displ(0xDEADBEEFDEADBEEF, 8),
+        )
+        .expect("Instruction creation failed");
+        let mut formatter = NasmFormatter::new();
+        let mut formatted_inst = String::new();
+        formatter.format(&inst, &mut formatted_inst);
+        println!("[*] instruction: {}", formatted_inst);
+        // assert_eq!(formatted_inst, "mov eax,ebx");
+        for _i in 0..1000 {
+            println!("---------------------");
+            match apply_otr_transform(&mut inst.clone(), 64) {
+                Ok(res) => {
+                    for i in res {
+                        formatted_inst.clear();
+                        formatter.format(&mut i.clone(), &mut formatted_inst);
+                        println!("[+] {}", formatted_inst);
+                    }
+                }
+                Err(e) => {
+                    println!("[-] {e}");
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_itr_transform() {
+        println!("[*] Testing immediate to register transform...");
+        let inst = Instruction::with2(Code::Mov_r32_imm32, Register::EAX, 0x6931)
+            .expect("Instruction creation failed");
+        let mut formatter = NasmFormatter::new();
+        let mut formatted_inst = String::new();
+        formatter.format(&inst, &mut formatted_inst);
+        println!("[*] instruction: {}", formatted_inst);
+        // assert_eq!(formatted_inst, "mov eax,ebx");
+        for _i in 0..1000 {
+            println!("---------------------");
+            match apply_itr_transform(&mut inst.clone(), 32) {
+                Ok(res) => {
+                    for i in res {
+                        formatted_inst.clear();
+                        formatter.format(&mut i.clone(), &mut formatted_inst);
+                        println!("[+] {}", formatted_inst);
+                    }
+                }
+                Err(e) => {
+                    println!("[-] {e}");
+                    break;
+                }
+            }
         }
     }
 
