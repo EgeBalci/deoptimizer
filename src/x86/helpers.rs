@@ -7,6 +7,19 @@ use iced_x86::{
 use rand::thread_rng;
 use rand::{seq::SliceRandom, Rng};
 
+pub fn randomize_immediate_value(imm: u64) -> u64 {
+    let mut rng = rand::thread_rng();
+    if imm < u8::MAX as u64 {
+        rng.gen_range(1..u8::MAX) as u64
+    } else if imm > u8::MAX as u64 && imm < u16::MAX as u64 {
+        rng.gen_range(u8::MAX as u16..u16::MAX) as u64
+    } else if imm > u16::MAX as u64 && imm < u32::MAX as u64 {
+        rng.gen_range(u16::MAX as u32..u32::MAX) as u64
+    } else {
+        rng.gen_range(u32::MAX as u64..u64::MAX) as u64
+    }
+}
+
 pub fn get_inverse_mnemonic(inst: &Instruction) -> Option<Mnemonic> {
     let ret = match inst.mnemonic() {
         Mnemonic::Add => Mnemonic::Sub,
@@ -28,32 +41,27 @@ pub fn get_inverse_mnemonic(inst: &Instruction) -> Option<Mnemonic> {
     Some(ret)
 }
 
-pub fn is_arithmetic_instruction(inst: &Instruction) -> bool {
+pub fn is_ap_safe_instruction(inst: &Instruction) -> bool {
     matches!(
         inst.mnemonic(),
-        Mnemonic::Mov
-            | Mnemonic::Add
-            | Mnemonic::Sub
-            | Mnemonic::Cmp
-            | Mnemonic::Adc
-            | Mnemonic::Sbb
-            | Mnemonic::Inc
-            | Mnemonic::Dec
+        Mnemonic::Mov | Mnemonic::Add | Mnemonic::Adc | Mnemonic::Sub | Mnemonic::Sbb
     )
 }
 
-pub fn is_logic_instruction(inst: &Instruction) -> bool {
+pub fn is_li_safe_instruction(inst: &Instruction) -> bool {
     matches!(
         inst.mnemonic(),
         Mnemonic::And
             | Mnemonic::Or
             | Mnemonic::Xor
-            | Mnemonic::Test
-            | Mnemonic::Not
             | Mnemonic::Shr
+            | Mnemonic::Sar
             | Mnemonic::Shl
+            | Mnemonic::Sal
             | Mnemonic::Rol
+            | Mnemonic::Rcl
             | Mnemonic::Ror
+            | Mnemonic::Rcr
     )
 }
 
@@ -175,11 +183,10 @@ pub fn get_random_gp_register(
     // Remove excluded registers
     if let Some(list) = exclude_list {
         for ex in list {
-            let index = shuffed_regs
-                .iter()
-                .position(|x| *x == ex.register())
-                .unwrap();
-            shuffed_regs.remove(index);
+            let index = shuffed_regs.iter().position(|x| *x == ex.register());
+            if index.is_some() {
+                shuffed_regs.remove(index.unwrap());
+            }
         }
     }
 
@@ -191,6 +198,44 @@ pub fn get_random_gp_register(
         }
     }
     Err(TransformError::RegisterNotFound)
+}
+pub fn get_xor_code_with(reg: Register) -> Result<Code, TransformError> {
+    let c = match reg.size() {
+        1 => Code::Xor_rm8_imm8,
+        2 => Code::Xor_rm16_imm16,
+        4 | 8 => Code::Xor_rm32_imm32,
+        _ => return Err(TransformError::UnexpectedRegisterSize),
+    };
+    Ok(c)
+}
+pub fn get_and_code_with(reg: Register) -> Result<Code, TransformError> {
+    let c = match reg.size() {
+        1 => Code::And_rm8_imm8,
+        2 => Code::And_rm16_imm16,
+        4 | 8 => Code::And_rm32_imm32,
+        _ => return Err(TransformError::UnexpectedRegisterSize),
+    };
+    Ok(c)
+}
+pub fn get_or_code_with(reg: Register) -> Result<Code, TransformError> {
+    let c = match reg.size() {
+        1 => Code::Or_rm8_imm8,
+        2 => Code::Or_rm16_imm16,
+        4 | 8 => Code::Or_rm32_imm32,
+        _ => return Err(TransformError::UnexpectedRegisterSize),
+    };
+    Ok(c)
+}
+
+pub fn get_not_code_with(reg: Register) -> Result<Code, TransformError> {
+    let c = match reg.size() {
+        1 => Code::Not_rm8,
+        2 => Code::Not_rm16,
+        4 => Code::Not_rm32,
+        8 => Code::Not_rm64,
+        _ => return Err(TransformError::UnexpectedRegisterSize),
+    };
+    Ok(c)
 }
 
 pub fn get_add_code_with(reg: Register) -> Result<Code, TransformError> {

@@ -1,10 +1,6 @@
 extern crate keystone;
 // use iced_x86::*;
-use iced_x86::{
-    Code, ConditionCode, Decoder, DecoderOptions, Formatter, GasFormatter, Instruction,
-    InstructionInfoFactory, IntelFormatter, MasmFormatter, NasmFormatter, OpKind, Register,
-    RflagsBits,
-};
+use iced_x86::*;
 use keystone::{AsmResult, Keystone};
 use log::{error, info, warn, LevelFilter};
 use rand::seq::SliceRandom;
@@ -212,10 +208,10 @@ impl Deoptimizer {
             1 => todo!("Handle blacklisted operands. (only 3 exists)"),
             2..=5 => {
                 // Priority is important, start with immidate obfuscation
-                if let Ok(t) = apply_ap_transform(&mut inst.clone(), mode) {
+                if let Ok(t) = apply_ap_transform(&mut inst.clone()) {
                     return Ok(t);
                 }
-                if let Ok(t) = apply_li_transform(&mut inst.clone(), mode) {
+                if let Ok(t) = apply_li_transform(&mut inst.clone()) {
                     return Ok(t);
                 }
                 if let Ok(t) = apply_itr_transform(&mut inst.clone(), mode) {
