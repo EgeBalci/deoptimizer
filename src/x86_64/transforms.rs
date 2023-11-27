@@ -1,6 +1,6 @@
-use crate::x86::*;
+use crate::x86_64::*;
 use iced_x86::*;
-use rand::{seq::SliceRandom, thread_rng, Rng};
+use rand::{seq::SliceRandom, Rng};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -13,8 +13,8 @@ pub enum TransformError {
     UnexpectedImmediateSize,
     #[error("Invalid processor mode given. (16/32/64 accepted)")]
     InvalidProcessorMode,
-    #[error("Register collection failed.")]
-    RegisterCollectFail,
+    // #[error("Register collection failed.")]
+    // RegisterCollectFail,
     #[error("No GP register found with given parameters.")]
     RegisterNotFound,
     #[error("IcedError: {0}")]
@@ -40,64 +40,56 @@ pub fn apply_om_transform(
     {
         return Err(TransformError::TransformNotPossible);
     }
-    let rnd_reg_val = get_random_register_value(base_reg);
-    let coin_flip: bool = rand::thread_rng().gen();
 
-    let (c1, c2) = match coin_flip {
-        true => (get_add_code_with(base_reg)?, get_sub_code_with(base_reg)?),
-        false => (get_sub_code_with(base_reg)?, get_add_code_with(base_reg)?),
-    };
-    let pre_inst = Instruction::with2(c1, base_reg, rnd_reg_val)?;
-    let post_inst = Instruction::with2(c2, base_reg, rnd_reg_val)?;
-    let new_disply = inst.memory_displacement64().abs_diff(rnd_reg_val);
-    let mut new_disply_signed = new_disply as i64; // This is not right!!!
-    if coin_flip {
-        new_disply_signed = -new_disply_signed;
-    }
-    match mode {
-        16 | 32 => inst.set_memory_displacement32(new_disply_signed as u32),
-        64 => inst.set_memory_displacement64(new_disply_signed as u64),
-        _ => return Err(TransformError::InvalidProcessorMode),
-    }
-    Ok(Vec::from([pre_inst, inst.clone(), post_inst]))
-}
+    if base_reg == Register::None {
+        let mut info_factory = InstructionInfoFactory::new();
+        let info = info_factory.info(&inst);
+        let rand_reg =
+            get_random_gp_register(mode == 64, (mode / 8) as usize, Some(info.used_registers()))?;
+        let rand_val = get_random_register_value(rand_reg);
+        let (reg_save_pre, reg_save_suf) = get_register_save_seq(rand_reg)?;
+        inst.set_memory_base(rand_reg);
+        let mut new_disply: i64 = inst.memory_displacement64().abs_diff(rand_val) as i64;
+        if rand_val > inst.memory_displacement64() {
+            new_disply = -new_disply;
+        }
+        let mov = match mode {
+            32 => {
+                inst.set_memory_displacement32(new_disply as u32);
+                Instruction::with2(Code::Mov_rm32_imm32, rand_reg, rand_val)?
+            }
+            64 => {
+                inst.set_memory_displacement64(new_disply as u64);
+                Instruction::with2(Code::Mov_r64_imm64, rand_reg, rand_val)?
+            }
+            _ => return Err(TransformError::UnexpectedRegisterSize),
+        };
+        Ok(Vec::from([reg_save_pre, mov, *inst, reg_save_suf]))
+    } else {
+        let rnd_reg_val = get_random_register_value(base_reg);
+        let coin_flip: bool = rand::thread_rng().gen();
 
-/// Applies offset-to-register transform to given instruction.
-pub fn apply_otr_transform(
-    inst: &mut Instruction,
-    mode: u32,
-) -> Result<Vec<Instruction>, TransformError> {
-    if !inst
-        .op_kinds()
-        .collect::<Vec<OpKind>>()
-        .contains(&OpKind::Memory)
-        || inst.memory_base() != Register::None
-    {
-        return Err(TransformError::TransformNotPossible);
+        let (c1, c2) = match coin_flip {
+            true => (get_add_code_with(base_reg)?, get_sub_code_with(base_reg)?),
+            false => (get_sub_code_with(base_reg)?, get_add_code_with(base_reg)?),
+        };
+        let pre_inst = Instruction::with2(c1, base_reg, rnd_reg_val)?;
+        let post_inst = Instruction::with2(c2, base_reg, rnd_reg_val)?;
+        let new_disply = inst.memory_displacement64().abs_diff(rnd_reg_val);
+        let mut new_disply_signed = new_disply as i64; // This is not right!!!
+        if coin_flip {
+            new_disply_signed = -new_disply_signed;
+        }
+        match mode {
+            16 | 32 => inst.set_memory_displacement32(new_disply_signed as u32),
+            64 => inst.set_memory_displacement64(new_disply_signed as u64),
+            _ => return Err(TransformError::InvalidProcessorMode),
+        }
+        Ok(Vec::from([pre_inst, inst.clone(), post_inst]))
     }
-    let mut info_factory = InstructionInfoFactory::new();
-    let info = info_factory.info(&inst);
-
-    let rand_reg =
-        get_random_gp_register(mode == 64, (mode / 8) as usize, Some(info.used_registers()))?;
-    let (reg_save_pre, reg_save_post) = get_register_save_seq(rand_reg)?;
-    let mov = match mode {
-        32 => Instruction::with2(Code::Mov_rm32_imm32, rand_reg, inst.memory_displacement32())?,
-        64 => Instruction::with2(Code::Mov_r64_imm64, rand_reg, inst.memory_displacement64())?,
-        _ => return Err(TransformError::UnexpectedRegisterSize),
-    };
-    // Obfuscate mov...
-    inst.set_memory_base(rand_reg);
-    match mode {
-        32 => inst.set_memory_displacement32(0),
-        64 => inst.set_memory_displacement64(0),
-        _ => return Err(TransformError::UnexpectedRegisterSize),
-    }
-    Ok(Vec::from([reg_save_pre, mov, *inst, reg_save_post]))
 }
 
 // Register Obfuscation Transforms
-
 /// Applies register swapping transform to given instruction.
 pub fn apply_rs_transform(
     inst: &mut Instruction,
@@ -190,15 +182,17 @@ pub fn apply_ap_transform(inst: &mut Instruction) -> Result<Vec<Instruction>, Tr
         || inst.op0_kind() != OpKind::Register
         || !is_immediate_operand(inst.op1_kind())
         || inst.op_count() != 2
+        || (inst.mnemonic() == Mnemonic::Mov && inst.op1_kind() == OpKind::Immediate64)
     {
         return Err(TransformError::TransformNotPossible);
     }
-
     // We are looking for MOV (=) ADD/ADC (+) SUB/SBB (-)
     // let mnemonic = inst.mnemonic();
     let reg = inst.op0_register();
     let imm = inst.immediate(1);
     let rand_imm_val = randomize_immediate_value(imm);
+    let imm_delta: u64 = rand_imm_val.abs_diff(imm);
+
     match inst.op1_kind() {
         OpKind::Immediate8 => inst.set_immediate8(rand_imm_val as u8),
         OpKind::Immediate8to16 => inst.set_immediate8to16(rand_imm_val as i16),
@@ -213,22 +207,20 @@ pub fn apply_ap_transform(inst: &mut Instruction) -> Result<Vec<Instruction>, Tr
     };
 
     let mut result = Vec::new();
+    if inst.mnemonic() == Mnemonic::Mov {
+        result.push(*inst);
+    }
     // we always need to make the value adjustment before the original instruction for preserving
     // the cflags...
     if imm > rand_imm_val {
-        result.push(Instruction::with2(
-            get_sub_code_with(reg)?,
-            reg,
-            rand_imm_val.abs_diff(imm),
-        )?);
+        result.push(Instruction::with2(get_add_code_with(reg)?, reg, imm_delta)?);
     } else {
-        result.push(Instruction::with2(
-            get_add_code_with(reg)?,
-            reg,
-            rand_imm_val.abs_diff(imm),
-        )?);
+        result.push(Instruction::with2(get_sub_code_with(reg)?, reg, imm_delta)?);
     }
-    result.push(*inst);
+    if inst.mnemonic() != Mnemonic::Mov {
+        result.push(*inst);
+    }
+
     Ok(result)
 }
 
@@ -316,7 +308,7 @@ pub fn apply_li_transform(inst: &mut Instruction) -> Result<Vec<Instruction>, Tr
 
 // Others...
 
-/// Applies call proxy instruction transform.
-pub fn apply_cp_transform(inst_addr: u64, mode: u32) -> Result<(), TransformError> {
-    todo!("...")
-}
+// /// Applies call proxy instruction transform.
+// pub fn apply_cp_transform(inst_addr: u64, mode: u32) -> Result<(), TransformError> {
+//     todo!("...")
+// }

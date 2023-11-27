@@ -1,14 +1,14 @@
 extern crate keystone;
-// use iced_x86::*;
 use iced_x86::*;
 use keystone::{AsmResult, Keystone};
-use log::{error, info, warn, LevelFilter};
+use log::{error, info, warn};
 use rand::seq::SliceRandom;
+use std::collections::HashMap;
 use thiserror::Error;
 
-use crate::x86::{
+use crate::x86_64::{
     apply_ap_transform, apply_itr_transform, apply_li_transform, apply_om_transform,
-    apply_otr_transform, apply_rs_transform,
+    apply_rs_transform,
 };
 
 #[derive(Error, Debug)]
@@ -19,6 +19,10 @@ pub enum DeoptimizerError {
     UnexpectedOperandCount,
     #[error("All available instruction transform gadgets failed.")]
     AllTransformsFailed,
+    #[error("Given instruction not found in code map.")]
+    InstructionNotFound,
+    #[error("Code analysis results are not found.")]
+    MissingCodeAnalysis,
 }
 
 enum AssemblySyntax {
@@ -30,12 +34,11 @@ enum AssemblySyntax {
 }
 
 pub struct Deoptimizer {
-    /// Immidiate partitioning length.
-    pub ipl: u32,
     /// Deoptimization frequency.
     pub freq: f64,
     /// Is the given code analyzed.
     pub is_analyzed: bool,
+    code_map: Option<HashMap<u64, Instruction>>,
     disassembly: Option<String>,
     syntax: AssemblySyntax,
     known_addr_table: Option<Vec<u64>>,
@@ -46,9 +49,9 @@ pub struct Deoptimizer {
 impl Deoptimizer {
     pub fn new() -> Self {
         Self {
-            ipl: 1,
             freq: 0.5,
             is_analyzed: false,
+            code_map: None,
             disassembly: None,
             syntax: AssemblySyntax::Nasm,
             known_addr_table: None,
@@ -70,13 +73,16 @@ impl Deoptimizer {
     }
 
     fn analyze(&mut self, code: &[u8], mode: u32, start_addr: u64) {
+        info!("Analyzing {} bytes with {} bit mode...", code.len(), mode);
         let mut decoder = Decoder::with_ip(mode, code, start_addr, DecoderOptions::NONE);
         let mut instruction = Instruction::default();
         let mut known_addr_table = Vec::new();
         let mut known_branch_targets = Vec::new();
         let mut cfe_addr_table = Vec::new();
+        let mut code: HashMap<u64, Instruction> = HashMap::new();
         while decoder.can_decode() {
             decoder.decode_out(&mut instruction);
+            code.insert(instruction.ip(), instruction);
             // Push to known address table
             known_addr_table.push(instruction.ip());
             let nbt = instruction.near_branch_target();
@@ -91,6 +97,7 @@ impl Deoptimizer {
                 cfe_addr_table.push(instruction.ip())
             }
         }
+        self.code_map = Some(code);
         self.known_addr_table = Some(known_addr_table);
         self.known_branch_targets = Some(known_branch_targets);
         self.cfe_addr_table = Some(cfe_addr_table);
@@ -163,9 +170,10 @@ impl Deoptimizer {
         let mut instruction = Instruction::default();
         // Analyze the given binary and genereate nessesary tables...
         self.analyze(code, mode, start_addr);
+        info!("Disassembling at -> 0x{:X} (mode={mode})", start_addr);
         while decoder.can_decode() {
             decoder.decode_out(&mut instruction);
-            // let offsets = decoder.get_constant_offsets(&instruction);
+            // let is_cfe = self.is_affecting_cf(&instruction)?;
             if instruction.is_invalid() {
                 warn!("Found invalid instruction at {}", instruction.ip());
                 let start_index = (instruction.ip() - start_addr) as usize;
@@ -199,38 +207,66 @@ impl Deoptimizer {
         Ok(result)
     }
 
+    pub fn is_affecting_cf(&self, inst: &Instruction) -> Result<bool, DeoptimizerError> {
+        // First check if the code is analyzed
+        if !self.is_analyzed || self.code_map.is_none() {
+            return Err(DeoptimizerError::MissingCodeAnalysis);
+        }
+        let code_map = self.code_map.clone().unwrap();
+
+        // Check if the instruction exists in self.code
+        if code_map.get(&inst.ip()).is_none() {
+            return Err(DeoptimizerError::InstructionNotFound);
+        }
+
+        let mut rflags = RflagsBits::NONE;
+        let m_rflags = inst.rflags_modified();
+        if m_rflags == RflagsBits::NONE {
+            return Ok(false);
+        }
+
+        let mut cursor = inst.clone();
+        while code_map.get(&cursor.next_ip()).is_some() {
+            cursor = *code_map.get(&cursor.next_ip()).unwrap();
+            rflags = rflags | cursor.rflags_modified();
+            if (cursor.rflags_read() & m_rflags) > 0 {
+                break;
+            }
+            if (m_rflags & rflags) == m_rflags {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
     pub fn apply_transform(
         inst: &Instruction,
         mode: u32,
     ) -> Result<Vec<Instruction>, DeoptimizerError> {
-        match inst.op_count() {
-            0 => todo!("Perform call proxy..."),
-            1 => todo!("Handle blacklisted operands. (only 3 exists)"),
-            2..=5 => {
-                // Priority is important, start with immidate obfuscation
-                if let Ok(t) = apply_ap_transform(&mut inst.clone()) {
-                    return Ok(t);
-                }
-                if let Ok(t) = apply_li_transform(&mut inst.clone()) {
-                    return Ok(t);
-                }
-                if let Ok(t) = apply_itr_transform(&mut inst.clone(), mode) {
-                    return Ok(t);
-                }
-                // second target memory obfuscation
-                if let Ok(t) = apply_om_transform(&mut inst.clone(), mode) {
-                    return Ok(t);
-                }
-                if let Ok(t) = apply_otr_transform(&mut inst.clone(), mode) {
-                    return Ok(t);
-                }
-                // Now swap registers
-                if let Ok(t) = apply_rs_transform(&mut inst.clone(), mode) {
-                    return Ok(t);
-                }
+        if inst.op_count() == 0 {
+            todo!("Perform call proxy...");
+        } else {
+            // Priority is important, start with immidate obfuscation
+            if let Ok(t) = apply_ap_transform(&mut inst.clone()) {
+                return Ok(t);
             }
-            _ => return Err(DeoptimizerError::UnexpectedOperandCount), // WTF? this shouldn't happen.
+            if let Ok(t) = apply_li_transform(&mut inst.clone()) {
+                return Ok(t);
+            }
+            if let Ok(t) = apply_itr_transform(&mut inst.clone(), mode) {
+                return Ok(t);
+            }
+            // second target memory obfuscation
+            if let Ok(t) = apply_om_transform(&mut inst.clone(), mode) {
+                return Ok(t);
+            }
+            // Now swap registers
+            if let Ok(t) = apply_rs_transform(&mut inst.clone(), mode) {
+                return Ok(t);
+            }
         }
+
         Err(DeoptimizerError::AllTransformsFailed)
     }
 

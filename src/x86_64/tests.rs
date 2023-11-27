@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::x86::*;
-    use iced_x86::{Code, Formatter, Instruction, MemoryOperand, NasmFormatter, OpKind, Register};
+    use crate::x86_64::*;
+    use iced_x86::*;
 
     #[test]
     fn test_om_transform() {
@@ -78,38 +78,6 @@ mod tests {
     }
 
     #[test]
-    fn test_otr_transform() {
-        println!("[*] Testing offset to register transform...");
-        let inst = Instruction::with2(
-            Code::Mov_r64_rm64,
-            Register::EAX,
-            MemoryOperand::with_displ(0xDEADBEEFDEADBEEF, 8),
-        )
-        .expect("Instruction creation failed");
-        let mut formatter = NasmFormatter::new();
-        let mut formatted_inst = String::new();
-        formatter.format(&inst, &mut formatted_inst);
-        println!("[*] instruction: {}", formatted_inst);
-        // assert_eq!(formatted_inst, "mov eax,ebx");
-        for _i in 0..10 {
-            println!("---------------------");
-            match apply_otr_transform(&mut inst.clone(), 64) {
-                Ok(res) => {
-                    for i in res {
-                        formatted_inst.clear();
-                        formatter.format(&mut i.clone(), &mut formatted_inst);
-                        println!("[+] {}", formatted_inst);
-                    }
-                }
-                Err(e) => {
-                    println!("[-] {e}");
-                    break;
-                }
-            }
-        }
-    }
-
-    #[test]
     fn test_itr_transform() {
         println!("[*] Testing immediate to register transform...");
         let inst = Instruction::with2(Code::Mov_r32_imm32, Register::EAX, 0x6931)
@@ -140,7 +108,7 @@ mod tests {
     #[test]
     fn test_ap_transform() {
         println!("[*] Testing arithmetic partitioning transform...");
-        let inst = Instruction::with2(Code::Add_rm32_imm32, Register::EAX, 0x6931)
+        let inst = Instruction::with2(Code::Mov_rm32_imm32, Register::EAX, 0xDEADBEEF as u32)
             .expect("Instruction creation failed");
         let mut formatter = NasmFormatter::new();
         let mut formatted_inst = String::new();

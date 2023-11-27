@@ -1,9 +1,5 @@
-use crate::x86::TransformError;
-use iced_x86::{
-    Code, ConditionCode, Decoder, DecoderOptions, Formatter, GasFormatter, IcedError, Instruction,
-    InstructionInfoFactory, IntelFormatter, MasmFormatter, MemoryOperand, Mnemonic, NasmFormatter,
-    OpAccess, OpKind, Register, RegisterInfo, RflagsBits, UsedRegister,
-};
+use crate::x86_64::TransformError;
+use iced_x86::*;
 use rand::thread_rng;
 use rand::{seq::SliceRandom, Rng};
 
@@ -20,26 +16,26 @@ pub fn randomize_immediate_value(imm: u64) -> u64 {
     }
 }
 
-pub fn get_inverse_mnemonic(inst: &Instruction) -> Option<Mnemonic> {
-    let ret = match inst.mnemonic() {
-        Mnemonic::Add => Mnemonic::Sub,
-        Mnemonic::Sub => Mnemonic::Add,
-        Mnemonic::Sbb => Mnemonic::Adc,
-        Mnemonic::Adc => Mnemonic::Sbb,
-        Mnemonic::Rol => Mnemonic::Ror,
-        Mnemonic::Ror => Mnemonic::Rol,
-        Mnemonic::Xor => Mnemonic::Xor,
-        Mnemonic::Inc => Mnemonic::Dec,
-        Mnemonic::Dec => Mnemonic::Inc,
-        Mnemonic::Or => Mnemonic::And,
-        Mnemonic::And => Mnemonic::Or,
-        Mnemonic::Shr => Mnemonic::Shl,
-        Mnemonic::Shl => Mnemonic::Shr,
-        Mnemonic::Not => Mnemonic::Not,
-        _ => return None,
-    };
-    Some(ret)
-}
+// pub fn get_inverse_mnemonic(inst: &Instruction) -> Option<Mnemonic> {
+//     let ret = match inst.mnemonic() {
+//         Mnemonic::Add => Mnemonic::Sub,
+//         Mnemonic::Sub => Mnemonic::Add,
+//         Mnemonic::Sbb => Mnemonic::Adc,
+//         Mnemonic::Adc => Mnemonic::Sbb,
+//         Mnemonic::Rol => Mnemonic::Ror,
+//         Mnemonic::Ror => Mnemonic::Rol,
+//         Mnemonic::Xor => Mnemonic::Xor,
+//         Mnemonic::Inc => Mnemonic::Dec,
+//         Mnemonic::Dec => Mnemonic::Inc,
+//         Mnemonic::Or => Mnemonic::And,
+//         Mnemonic::And => Mnemonic::Or,
+//         Mnemonic::Shr => Mnemonic::Shl,
+//         Mnemonic::Shl => Mnemonic::Shr,
+//         Mnemonic::Not => Mnemonic::Not,
+//         _ => return None,
+//     };
+//     Some(ret)
+// }
 
 pub fn is_ap_safe_instruction(inst: &Instruction) -> bool {
     matches!(
@@ -65,18 +61,32 @@ pub fn is_li_safe_instruction(inst: &Instruction) -> bool {
     )
 }
 
-pub fn get_random_arithmetic_mnemonic() -> Mnemonic {
-    let arithmetics = Vec::from([
-        Mnemonic::Mov,
-        Mnemonic::Add,
-        Mnemonic::Sub,
-        Mnemonic::Cmp,
-        Mnemonic::Adc,
-        Mnemonic::Sbb,
-        Mnemonic::Inc,
-        Mnemonic::Dec,
-    ]);
-    *arithmetics.choose(&mut rand::thread_rng()).unwrap()
+// pub fn get_random_arithmetic_mnemonic() -> Mnemonic {
+//     let arithmetics = Vec::from([
+//         Mnemonic::Mov,
+//         Mnemonic::Add,
+//         Mnemonic::Sub,
+//         Mnemonic::Cmp,
+//         Mnemonic::Adc,
+//         Mnemonic::Sbb,
+//         Mnemonic::Inc,
+//         Mnemonic::Dec,
+//     ]);
+//     *arithmetics.choose(&mut rand::thread_rng()).unwrap()
+// }
+
+pub fn get_aprx_immediate_size(imm: u64) -> OpKind {
+    if imm <= u8::MAX as u64 {
+        return OpKind::Immediate8;
+    } else if imm > u8::MAX as u64 && imm <= u16::MAX as u64 {
+        return OpKind::Immediate16;
+    } else if imm > u16::MAX as u64 && imm <= u32::MAX as u64 {
+        return OpKind::Immediate32;
+    } else if imm > u32::MAX as u64 && imm <= u64::MAX {
+        return OpKind::Immediate64;
+    } else {
+        return OpKind::Immediate8to64;
+    }
 }
 
 pub fn get_immediate_indexes(inst: &Instruction) -> Option<Vec<u32>> {
@@ -150,11 +160,12 @@ pub fn get_random_gp_register(
             gpr16.push(r);
             continue;
         }
-        if r.is_gpr32() {
+        if r.is_gpr32() && r != Register::ESP {
+            // We don't want stack pointers
             gpr32.push(r);
             continue;
         }
-        if r.is_gpr64() {
+        if r.is_gpr64() && r != Register::RSP {
             gpr64.push(r);
             continue;
         }
@@ -199,15 +210,15 @@ pub fn get_random_gp_register(
     }
     Err(TransformError::RegisterNotFound)
 }
-pub fn get_xor_code_with(reg: Register) -> Result<Code, TransformError> {
-    let c = match reg.size() {
-        1 => Code::Xor_rm8_imm8,
-        2 => Code::Xor_rm16_imm16,
-        4 | 8 => Code::Xor_rm32_imm32,
-        _ => return Err(TransformError::UnexpectedRegisterSize),
-    };
-    Ok(c)
-}
+// pub fn get_xor_code_with(reg: Register) -> Result<Code, TransformError> {
+//     let c = match reg.size() {
+//         1 => Code::Xor_rm8_imm8,
+//         2 => Code::Xor_rm16_imm16,
+//         4 | 8 => Code::Xor_rm32_imm32,
+//         _ => return Err(TransformError::UnexpectedRegisterSize),
+//     };
+//     Ok(c)
+// }
 pub fn get_and_code_with(reg: Register) -> Result<Code, TransformError> {
     let c = match reg.size() {
         1 => Code::And_rm8_imm8,
@@ -242,7 +253,8 @@ pub fn get_add_code_with(reg: Register) -> Result<Code, TransformError> {
     let c = match reg.size() {
         1 => Code::Add_rm8_imm8,
         2 => Code::Add_rm16_imm16,
-        4 | 8 => Code::Add_rm32_imm32,
+        4 => Code::Add_rm32_imm32,
+        8 => Code::Add_rm64_imm32,
         _ => return Err(TransformError::UnexpectedRegisterSize),
     };
     Ok(c)
@@ -252,7 +264,8 @@ pub fn get_sub_code_with(reg: Register) -> Result<Code, TransformError> {
     let c = match reg.size() {
         1 => Code::Sub_rm8_imm8,
         2 => Code::Sub_rm16_imm16,
-        4 | 8 => Code::Sub_rm32_imm32,
+        4 => Code::Sub_rm32_imm32,
+        8 => Code::Sub_rm64_imm32,
         _ => return Err(TransformError::UnexpectedRegisterSize),
     };
     Ok(c)
