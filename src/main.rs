@@ -3,7 +3,7 @@ use std::io::Write;
 
 mod options;
 mod utils;
-mod x86;
+mod x86_64;
 
 // const TIMEOUT: u64 = 30;
 static LOGGER: utils::Logger = utils::Logger;
@@ -18,9 +18,15 @@ fn main() {
             return;
         }
     };
+
+    if opts.freq > 0.8 || opts.cycle > 2 {
+        warn!("Deoptimization parameters are too aggressive!");
+        warn!("The output size will drasstically increase.")
+    }
+
     let file = utils::read_file(opts.file.clone()).expect("failed reading target file");
     info!("File size: {}", file.len());
-    let mut deopt = x86::Deoptimizer::new();
+    let mut deopt = x86_64::Deoptimizer::new();
     deopt.set_syntax(opts.syntax).expect("invalid syntax");
     let out = deopt
         .disassemble(&file, opts.mode, 0x401000)
