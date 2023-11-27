@@ -10,9 +10,9 @@ pub enum ArgParseError {
 
 /// QSocket toolkit options.
 #[derive(Parser, Debug)]
-#[command(name = "x86 Deoptimizer")]
+#[command(name = "Deoptimizer")]
 #[command(version = "1.0.0")]
-#[command(about = "x86 Deoptimizer.", long_about = None)]
+#[command(about = "Deoptimizer.", long_about = None)]
 pub struct Options {
     /// target x86 binary file name.
     #[arg(long, short = 'f', default_value_t = String::new())]
@@ -26,13 +26,13 @@ pub struct Options {
     #[arg(long, short = 'm', default_value_t = 32)]
     pub mode: u32,
 
+    /// total number of deoptimization cycles.
+    #[arg(long, short = 'c', default_value_t = 1)]
+    pub cycle: u32,
+
     /// deoptimization frequency.
     #[arg(long, short = 'F', default_value_t = 0.5)]
     pub freq: f64,
-
-    /// Immidiate instruction partitioning length.
-    #[arg(long, default_value_t = 1)]
-    pub ipl: u32,
 
     /// verbose output mode.
     #[arg(long, short = 'v')]
