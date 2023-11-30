@@ -1,4 +1,5 @@
 use log::{error, info, warn, LevelFilter};
+use std::fs::File;
 use std::io::Write;
 
 mod options;
@@ -24,25 +25,25 @@ fn main() {
         warn!("The output size will drasstically increase.")
     }
 
-    let file = utils::read_file(opts.file.clone()).expect("failed reading target file");
+    let file = utils::read_file(opts.file.clone()).expect("failed reading target file!");
+    let mut out_file = File::create(opts.source).expect("source file creation failed!");
     info!("File size: {}", file.len());
     let mut deopt = x86_64::Deoptimizer::new();
     deopt.set_syntax(opts.syntax).expect("invalid syntax");
-    let out = deopt
-        .disassemble(&file, opts.mode, 0x401000)
-        .expect("disassembly failed!");
-    println!("{}", out);
-    match deopt.assemble(out.clone(), opts.mode, 0x401000) {
-        Ok(b) => {
-            let mut f2 = std::fs::File::create("success.bin").expect("failed opening file!");
-            f2.write_all(&b.bytes).expect("failed writing!");
-        }
+    let acode = deopt
+        .analyze(&file, opts.bitness, 0x401000)
+        .expect("code analysis failed!");
+    // let out = deopt.disassemble(&acode).expect("disassembly failed!");
+    // println!("{}", out);
+    info!("Deoptimizing...");
+    let bin = deopt.deoptimize(&acode);
+    let bytes = match bin {
+        Ok(b) => b,
         Err(e) => {
             error!("{}", e);
-            let mut f2 = std::fs::File::create("error.asm").expect("failed opening file!");
-            let _ = f2.write_all(b"[BITS 32]\n");
-            f2.write_all(out.as_bytes()).expect("failed writing!");
+            return;
         }
     };
-    // hexdump::hexdump(&bin.bytes);
+    let _ = out_file.write_all(bytes.as_bytes());
+    info!("All done!");
 }

@@ -3,6 +3,8 @@ use iced_x86::*;
 use rand::thread_rng;
 use rand::{seq::SliceRandom, Rng};
 
+use super::DeoptimizerError;
+
 pub fn randomize_immediate_value(imm: u64) -> u64 {
     let mut rng = rand::thread_rng();
     if imm < u8::MAX as u64 {
@@ -16,35 +18,82 @@ pub fn randomize_immediate_value(imm: u64) -> u64 {
     }
 }
 
-// pub fn get_inverse_mnemonic(inst: &Instruction) -> Option<Mnemonic> {
-//     let ret = match inst.mnemonic() {
-//         Mnemonic::Add => Mnemonic::Sub,
-//         Mnemonic::Sub => Mnemonic::Add,
-//         Mnemonic::Sbb => Mnemonic::Adc,
-//         Mnemonic::Adc => Mnemonic::Sbb,
-//         Mnemonic::Rol => Mnemonic::Ror,
-//         Mnemonic::Ror => Mnemonic::Rol,
-//         Mnemonic::Xor => Mnemonic::Xor,
-//         Mnemonic::Inc => Mnemonic::Dec,
-//         Mnemonic::Dec => Mnemonic::Inc,
-//         Mnemonic::Or => Mnemonic::And,
-//         Mnemonic::And => Mnemonic::Or,
-//         Mnemonic::Shr => Mnemonic::Shl,
-//         Mnemonic::Shl => Mnemonic::Shr,
-//         Mnemonic::Not => Mnemonic::Not,
-//         _ => return None,
-//     };
-//     Some(ret)
-// }
+pub fn encode(
+    bitness: u32,
+    insts: Vec<Instruction>,
+    rip: u64,
+) -> Result<Vec<Instruction>, IcedError> {
+    let mut buffer = Vec::new();
+    let mut result = Vec::new();
+    for inst in insts.clone() {
+        let mut encoder = Encoder::new(bitness);
+        match encoder.encode(&inst, inst.ip()) {
+            Ok(_) => buffer = [buffer, encoder.take_buffer()].concat(),
+            Err(e) => return Err(e),
+        };
+    }
+    let mut decoder = Decoder::new(bitness, &buffer, DecoderOptions::NONE);
+    decoder.set_ip(rip);
+    let mut inst = Instruction::default();
+    while decoder.can_decode() {
+        decoder.decode_out(&mut inst);
+        result.push(inst);
+    }
 
-pub fn is_ap_safe_instruction(inst: &Instruction) -> bool {
+    Ok(result)
+}
+
+pub fn is_using_static_register(inst: &Instruction) -> bool {
+    if !matches!(
+        inst.mnemonic(),
+        Mnemonic::In
+            | Mnemonic::Out
+            | Mnemonic::Outsb
+            | Mnemonic::Outsd
+            | Mnemonic::Outsw
+            | Mnemonic::Or
+            | Mnemonic::Adc
+            | Mnemonic::Add
+            | Mnemonic::And
+            | Mnemonic::Cmp
+            | Mnemonic::Sbb
+            | Mnemonic::Sub
+            | Mnemonic::Xor
+            | Mnemonic::Mov
+            | Mnemonic::Test
+            | Mnemonic::Lodsb
+            | Mnemonic::Scasb
+    ) {
+        return false;
+    }
+
+    if matches!(
+        inst.op0_register(),
+        Register::AL | Register::AX | Register::EAX
+    ) {
+        return true;
+    }
+
+    if inst.op_count() > 0 && inst.op0_kind() == OpKind::Register {
+        if matches!(
+            inst.mnemonic(),
+            Mnemonic::In | Mnemonic::Out | Mnemonic::Outsb | Mnemonic::Outsd | Mnemonic::Outsw
+        ) && inst.op0_register() == Register::DX
+        {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn is_ap_compatible(inst: &Instruction) -> bool {
     matches!(
         inst.mnemonic(),
         Mnemonic::Mov | Mnemonic::Add | Mnemonic::Adc | Mnemonic::Sub | Mnemonic::Sbb
     )
 }
 
-pub fn is_li_safe_instruction(inst: &Instruction) -> bool {
+pub fn is_li_compatible(inst: &Instruction) -> bool {
     matches!(
         inst.mnemonic(),
         Mnemonic::And
@@ -60,20 +109,6 @@ pub fn is_li_safe_instruction(inst: &Instruction) -> bool {
             | Mnemonic::Rcr
     )
 }
-
-// pub fn get_random_arithmetic_mnemonic() -> Mnemonic {
-//     let arithmetics = Vec::from([
-//         Mnemonic::Mov,
-//         Mnemonic::Add,
-//         Mnemonic::Sub,
-//         Mnemonic::Cmp,
-//         Mnemonic::Adc,
-//         Mnemonic::Sbb,
-//         Mnemonic::Inc,
-//         Mnemonic::Dec,
-//     ]);
-//     *arithmetics.choose(&mut rand::thread_rng()).unwrap()
-// }
 
 pub fn get_aprx_immediate_size(imm: u64) -> OpKind {
     if imm <= u8::MAX as u64 {
@@ -132,9 +167,53 @@ pub fn get_register_save_seq(reg: Register) -> Result<(Instruction, Instruction)
 pub fn get_random_register_value(reg: Register) -> u64 {
     let mut rng = rand::thread_rng();
     if reg.size() > 4 {
-        return rng.gen_range(1..u32::MAX) as u64;
+        return rng.gen_range(1..i32::MAX) as u64;
     }
-    rng.gen_range(1..u64::pow(2, (reg.size() * 8) as u32)) as u64
+    rng.gen_range(1..i64::pow(2, (reg.size() * 8) as u32)) as u64
+}
+
+pub fn set_op1_immediate(inst: &mut Instruction, imm: u64) -> Result<(), TransformError> {
+    match inst.op1_kind() {
+        OpKind::Immediate8 => inst.set_immediate8(imm as u8),
+        OpKind::Immediate8to16 => inst.set_immediate8to16(imm as i16),
+        OpKind::Immediate8to32 => inst.set_immediate8to32(imm as i32),
+        OpKind::Immediate8to64 => inst.set_immediate8to64(imm as i64),
+        OpKind::Immediate8_2nd => inst.set_immediate8_2nd(imm as u8),
+        OpKind::Immediate16 => inst.set_immediate16(imm as u16),
+        OpKind::Immediate32 => inst.set_immediate32(imm as u32),
+        OpKind::Immediate32to64 => inst.set_immediate32to64(imm as i64),
+        OpKind::Immediate64 => inst.set_immediate64(imm),
+        _ => return Err(TransformError::UnexpectedImmediateSize),
+    };
+    Ok(())
+}
+
+pub fn set_branch_target(inst: &mut Instruction, bt: u64) -> Result<(), DeoptimizerError> {
+    if matches!(inst.op0_kind(), OpKind::FarBranch16 | OpKind::FarBranch32) {
+        if bt < u16::MAX as u64 {
+            inst.set_op0_kind(OpKind::FarBranch16);
+            inst.set_far_branch16(bt as u16);
+        } else if bt >= u16::MAX as u64 && bt < u32::MAX as u64 {
+            inst.set_op0_kind(OpKind::FarBranch32);
+            inst.set_near_branch32(bt as u32);
+        } else {
+            return Err(DeoptimizerError::FarBranchTooBig);
+        }
+        return Ok(());
+    }
+    if bt < u16::MAX as u64 {
+        inst.set_op0_kind(OpKind::NearBranch16);
+        inst.set_near_branch16(bt as u16);
+    } else if bt >= u16::MAX as u64 && bt < u32::MAX as u64 {
+        inst.set_op0_kind(OpKind::NearBranch32);
+        inst.set_near_branch32(bt as u32);
+    } else if bt >= u32::MAX as u64 && bt < u64::MAX {
+        inst.set_op0_kind(OpKind::NearBranch64);
+        inst.set_near_branch64(bt);
+    } else {
+        return Err(DeoptimizerError::NearBranchTooBig);
+    }
+    Ok(())
 }
 
 pub fn get_random_gp_register(
@@ -210,63 +289,104 @@ pub fn get_random_gp_register(
     }
     Err(TransformError::RegisterNotFound)
 }
-// pub fn get_xor_code_with(reg: Register) -> Result<Code, TransformError> {
-//     let c = match reg.size() {
-//         1 => Code::Xor_rm8_imm8,
-//         2 => Code::Xor_rm16_imm16,
-//         4 | 8 => Code::Xor_rm32_imm32,
-//         _ => return Err(TransformError::UnexpectedRegisterSize),
-//     };
-//     Ok(c)
-// }
-pub fn get_and_code_with(reg: Register) -> Result<Code, TransformError> {
-    let c = match reg.size() {
-        1 => Code::And_rm8_imm8,
-        2 => Code::And_rm16_imm16,
-        4 | 8 => Code::And_rm32_imm32,
-        _ => return Err(TransformError::UnexpectedRegisterSize),
+
+pub fn get_code_with_template(
+    mnemonic: Mnemonic,
+    inst: &Instruction,
+) -> Result<Code, TransformError> {
+    if (inst.op_count() != 2 && inst.op_count() != 1) || !is_immediate_operand(inst.op1_kind()) {
+        return Err(TransformError::InvalidTemplate);
+    }
+    let dst_op_size = match inst.op0_kind() {
+        OpKind::Memory => inst.memory_size().element_size(),
+        OpKind::Register => inst.op0_register().size(),
+        _ => return Err(TransformError::InvalidTemplate),
     };
-    Ok(c)
+
+    Ok(get_code_with_size(mnemonic, dst_op_size)?)
 }
-pub fn get_or_code_with(reg: Register) -> Result<Code, TransformError> {
-    let c = match reg.size() {
-        1 => Code::Or_rm8_imm8,
-        2 => Code::Or_rm16_imm16,
-        4 | 8 => Code::Or_rm32_imm32,
-        _ => return Err(TransformError::UnexpectedRegisterSize),
+
+pub fn get_code_with_size(mnemonic: Mnemonic, size: usize) -> Result<Code, TransformError> {
+    let c = match mnemonic {
+        Mnemonic::Add => match size {
+            1 => Code::Add_rm8_imm8,
+            2 => Code::Add_rm16_imm16,
+            4 => Code::Add_rm32_imm32,
+            8 => Code::Add_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Adc => match size {
+            1 => Code::Adc_rm8_imm8,
+            2 => Code::Adc_rm16_imm16,
+            4 => Code::Adc_rm32_imm32,
+            8 => Code::Adc_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Sub => match size {
+            1 => Code::Sub_rm8_imm8,
+            2 => Code::Sub_rm16_imm16,
+            4 => Code::Sub_rm32_imm32,
+            8 => Code::Sub_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Xor => match size {
+            1 => Code::Xor_rm8_imm8,
+            2 => Code::Xor_rm16_imm16,
+            4 => Code::Xor_rm32_imm32,
+            8 => Code::Xor_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::And => match size {
+            1 => Code::And_rm8_imm8,
+            2 => Code::And_rm16_imm16,
+            4 => Code::And_rm32_imm32,
+            8 => Code::And_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Or => match size {
+            1 => Code::Or_rm8_imm8,
+            2 => Code::Or_rm16_imm16,
+            4 => Code::Or_rm32_imm32,
+            8 => Code::Or_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Not => match size {
+            1 => Code::Not_rm8,
+            2 => Code::Not_rm16,
+            4 => Code::Not_rm32,
+            8 => Code::Not_rm64,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Mov => match size {
+            1 => Code::Mov_rm8_imm8,
+            2 => Code::Mov_rm16_imm16,
+            4 => Code::Mov_rm32_imm32,
+            8 => Code::Mov_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Cmp => match size {
+            1 => Code::Cmp_rm8_imm8,
+            2 => Code::Cmp_rm16_imm16,
+            4 => Code::Cmp_rm32_imm32,
+            8 => Code::Cmp_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        Mnemonic::Test => match size {
+            1 => Code::Test_rm8_imm8,
+            2 => Code::Test_rm16_imm16,
+            4 => Code::Test_rm32_imm32,
+            8 => Code::Test_rm64_imm32,
+            _ => return Err(TransformError::InvalidTemplate),
+        },
+        _ => return Err(TransformError::InvalidTemplate),
     };
     Ok(c)
 }
 
-pub fn get_not_code_with(reg: Register) -> Result<Code, TransformError> {
-    let c = match reg.size() {
-        1 => Code::Not_rm8,
-        2 => Code::Not_rm16,
-        4 => Code::Not_rm32,
-        8 => Code::Not_rm64,
-        _ => return Err(TransformError::UnexpectedRegisterSize),
-    };
-    Ok(c)
-}
-
-pub fn get_add_code_with(reg: Register) -> Result<Code, TransformError> {
-    let c = match reg.size() {
-        1 => Code::Add_rm8_imm8,
-        2 => Code::Add_rm16_imm16,
-        4 => Code::Add_rm32_imm32,
-        8 => Code::Add_rm64_imm32,
-        _ => return Err(TransformError::UnexpectedRegisterSize),
-    };
-    Ok(c)
-}
-
-pub fn get_sub_code_with(reg: Register) -> Result<Code, TransformError> {
-    let c = match reg.size() {
-        1 => Code::Sub_rm8_imm8,
-        2 => Code::Sub_rm16_imm16,
-        4 => Code::Sub_rm32_imm32,
-        8 => Code::Sub_rm64_imm32,
-        _ => return Err(TransformError::UnexpectedRegisterSize),
-    };
-    Ok(c)
+pub fn to_db_mnemonic(bytes: &[u8]) -> String {
+    let mut db_inst = String::from("db ");
+    for b in bytes.iter() {
+        db_inst += &format!("0x{:02X}, ", b);
+    }
+    db_inst.trim_end_matches(", ").to_string()
 }

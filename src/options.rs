@@ -18,13 +18,17 @@ pub struct Options {
     #[arg(long, short = 'f', default_value_t = String::new())]
     pub file: String,
 
+    /// source assembly file.
+    #[arg(long, short = 's', default_value_t = String::new())]
+    pub source: String,
+
     /// assembler formatter syntax (nasm/masm/intel/gas).
-    #[arg(long, short = 's', default_value_t = String::from("keystone"))]
+    #[arg(long, default_value_t = String::from("keystone"))]
     pub syntax: String,
 
-    /// bitness of the binary file (32/64).
-    #[arg(long, short = 'm', default_value_t = 32)]
-    pub mode: u32,
+    /// bitness of the binary file (16/32/64).
+    #[arg(long, short = 'b', default_value_t = 64)]
+    pub bitness: u32,
 
     /// total number of deoptimization cycles.
     #[arg(long, short = 'c', default_value_t = 1)]
@@ -33,6 +37,10 @@ pub struct Options {
     /// deoptimization frequency.
     #[arg(long, short = 'F', default_value_t = 0.5)]
     pub freq: f64,
+
+    /// allow processing of invalid instructions.
+    #[arg(long)]
+    pub allow_invalid: bool,
 
     /// verbose output mode.
     #[arg(long, short = 'v')]

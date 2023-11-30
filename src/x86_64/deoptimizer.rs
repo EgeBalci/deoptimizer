@@ -1,14 +1,12 @@
-extern crate keystone;
 use iced_x86::*;
-use keystone::{AsmResult, Keystone};
-use log::{error, info, warn};
-use rand::seq::SliceRandom;
-use std::collections::HashMap;
+use log::{debug, error, info, warn};
+use rand::{distributions::uniform::UniformSampler, seq::SliceRandom, Rng};
+use std::{collections::HashMap, error};
 use thiserror::Error;
 
 use crate::x86_64::{
     apply_ap_transform, apply_itr_transform, apply_li_transform, apply_om_transform,
-    apply_rs_transform,
+    apply_rs_transform, set_branch_target, to_db_mnemonic,
 };
 
 #[derive(Error, Debug)]
@@ -23,6 +21,14 @@ pub enum DeoptimizerError {
     InstructionNotFound,
     #[error("Code analysis results are not found.")]
     MissingCodeAnalysis,
+    #[error("Near branch value too large.")]
+    NearBranchTooBig,
+    #[error("Far branch value too large.")]
+    FarBranchTooBig,
+    #[error("Found invalid instruction.")]
+    InvalidInstruction,
+    #[error("Instruction encoding failed: {0}")]
+    EncodingFail(#[from] IcedError),
 }
 
 enum AssemblySyntax {
@@ -33,30 +39,77 @@ enum AssemblySyntax {
     Gas,
 }
 
+pub struct AnalyzedCode {
+    bitness: u32,
+    bytes: Vec<u8>,
+    start_addr: u64,
+    code: Vec<Instruction>,
+    addr_map: HashMap<u64, Instruction>,
+    known_addr_table: Vec<u64>,
+    near_branch_targets: Vec<u64>,
+    far_branch_targets: Vec<u64>,
+    cfe_addr_table: Vec<u64>,
+}
+
+impl AnalyzedCode {
+    fn is_known_address(&self, addr: u64) -> bool {
+        self.known_addr_table.contains(&addr)
+    }
+    fn is_near_branch_target(&self, addr: u64) -> bool {
+        self.near_branch_targets.contains(&addr)
+    }
+    fn is_far_branch_target(&self, addr: u64) -> bool {
+        self.far_branch_targets.contains(&addr)
+    }
+    fn get_random_cfe_addr(&self) -> Option<u64> {
+        self.cfe_addr_table.choose(&mut rand::thread_rng()).copied()
+    }
+    pub fn is_affecting_cf(&self, inst: &Instruction) -> Result<bool, DeoptimizerError> {
+        // Check if the instruction exists in self.code
+        if self.addr_map.get(&inst.ip()).is_none() {
+            return Err(DeoptimizerError::InstructionNotFound);
+        }
+
+        let mut rflags = RflagsBits::NONE;
+        let m_rflags = inst.rflags_modified();
+        if m_rflags == RflagsBits::NONE {
+            return Ok(false);
+        }
+
+        let mut cursor = inst.clone();
+        while self.addr_map.get(&cursor.next_ip()).is_some() {
+            cursor = *self.addr_map.get(&cursor.next_ip()).unwrap();
+            rflags = rflags | cursor.rflags_modified();
+            if (cursor.rflags_read() & m_rflags) > 0 {
+                break;
+            }
+            if (m_rflags & rflags) == m_rflags {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+}
+
 pub struct Deoptimizer {
+    /// Total number of deoptimization cycles.
+    pub cycle: u32,
     /// Deoptimization frequency.
     pub freq: f64,
-    /// Is the given code analyzed.
-    pub is_analyzed: bool,
-    code_map: Option<HashMap<u64, Instruction>>,
-    disassembly: Option<String>,
+    /// Allow processing of invalid instructions.
+    pub allow_invalid: bool,
+    /// Disassembler syntax.
     syntax: AssemblySyntax,
-    known_addr_table: Option<Vec<u64>>,
-    known_branch_targets: Option<Vec<u64>>,
-    cfe_addr_table: Option<Vec<u64>>,
 }
 
 impl Deoptimizer {
     pub fn new() -> Self {
         Self {
+            cycle: 1,
             freq: 0.5,
-            is_analyzed: false,
-            code_map: None,
-            disassembly: None,
+            allow_invalid: false,
             syntax: AssemblySyntax::Nasm,
-            known_addr_table: None,
-            known_branch_targets: None,
-            cfe_addr_table: None,
         }
     }
 
@@ -72,57 +125,72 @@ impl Deoptimizer {
         Ok(())
     }
 
-    fn analyze(&mut self, code: &[u8], mode: u32, start_addr: u64) {
-        info!("Analyzing {} bytes with {} bit mode...", code.len(), mode);
-        let mut decoder = Decoder::with_ip(mode, code, start_addr, DecoderOptions::NONE);
-        let mut instruction = Instruction::default();
+    pub fn analyze(
+        &mut self,
+        bytes: &[u8],
+        bitness: u32,
+        start_addr: u64,
+    ) -> Result<AnalyzedCode, DeoptimizerError> {
+        info!(
+            "Analyzing {} bytes with {} bit mode...",
+            bytes.len(),
+            bitness
+        );
+        let mut decoder = Decoder::with_ip(bitness, bytes, start_addr, DecoderOptions::NONE);
+        let mut inst = Instruction::default();
         let mut known_addr_table = Vec::new();
-        let mut known_branch_targets = Vec::new();
+        let mut near_branch_targets = Vec::new();
+        let mut far_branch_targets = Vec::new();
         let mut cfe_addr_table = Vec::new();
-        let mut code: HashMap<u64, Instruction> = HashMap::new();
+        let mut code = Vec::new();
+        let mut addr_map: HashMap<u64, Instruction> = HashMap::new();
         while decoder.can_decode() {
-            decoder.decode_out(&mut instruction);
-            code.insert(instruction.ip(), instruction);
+            decoder.decode_out(&mut inst);
+            if inst.is_invalid() {
+                warn!("Found invalid instruction at: 0x{:016X}", inst.ip());
+                if !self.allow_invalid {
+                    return Err(DeoptimizerError::InvalidSyntax);
+                }
+            }
+            code.push(inst);
+            addr_map.insert(inst.ip(), inst);
+
+            if inst.op_count() == 1
+                && matches!(inst.op0_kind(), OpKind::FarBranch16 | OpKind::FarBranch32)
+            {
+                match inst.op0_kind() {
+                    OpKind::FarBranch32 => far_branch_targets.push(inst.far_branch32() as u64),
+                    OpKind::FarBranch16 => far_branch_targets.push(inst.far_branch16() as u64),
+                    _ => (),
+                }
+            }
+
             // Push to known address table
-            known_addr_table.push(instruction.ip());
-            let nbt = instruction.near_branch_target();
+            known_addr_table.push(inst.ip());
+            let nbt = inst.near_branch_target();
             if nbt != 0 {
-                known_branch_targets.push(nbt);
+                near_branch_targets.push(nbt);
             }
             // Push to control flow exit address table if it is a JMP of RET
-            if instruction.mnemonic() == iced_x86::Mnemonic::Ret
-                || instruction.mnemonic() == iced_x86::Mnemonic::Retf
-                || instruction.mnemonic() == iced_x86::Mnemonic::Jmp
+            if inst.mnemonic() == Mnemonic::Ret
+                || inst.mnemonic() == Mnemonic::Retf
+                || inst.mnemonic() == Mnemonic::Jmp
             {
-                cfe_addr_table.push(instruction.ip())
+                cfe_addr_table.push(inst.ip())
             }
         }
-        self.code_map = Some(code);
-        self.known_addr_table = Some(known_addr_table);
-        self.known_branch_targets = Some(known_branch_targets);
-        self.cfe_addr_table = Some(cfe_addr_table);
-        self.is_analyzed = true;
-    }
 
-    fn is_known_address(&mut self, addr: u64) -> bool {
-        if let Some(table) = &self.known_addr_table {
-            return table.contains(&addr);
-        }
-        false
-    }
-
-    fn is_branch_target(&mut self, addr: u64) -> bool {
-        if let Some(table) = &self.known_branch_targets {
-            return table.contains(&addr);
-        }
-        false
-    }
-
-    fn get_random_cfe_addr(&self) -> Option<u64> {
-        if let Some(table) = &self.cfe_addr_table {
-            return table.choose(&mut rand::thread_rng()).copied();
-        }
-        None
+        Ok(AnalyzedCode {
+            bitness,
+            bytes: bytes.to_vec(),
+            start_addr,
+            code,
+            addr_map,
+            known_addr_table,
+            near_branch_targets,
+            far_branch_targets,
+            cfe_addr_table,
+        })
     }
 
     pub fn format_instruction(&self, inst: &Instruction) -> String {
@@ -158,154 +226,177 @@ impl Deoptimizer {
         result
     }
 
-    pub fn disassemble(
-        &mut self,
-        code: &[u8],
-        mode: u32,
-        start_addr: u64,
-    ) -> Result<String, DeoptimizerError> {
-        let mut decoder = Decoder::with_ip(mode, code, start_addr, DecoderOptions::NONE);
+    pub fn disassemble(&mut self, acode: &AnalyzedCode) -> Result<String, DeoptimizerError> {
+        info!(
+            "Disassembling at -> 0x{:X} (mode={})",
+            acode.start_addr, acode.bitness
+        );
         let mut result = String::new();
-        // let mut info_factory = InstructionInfoFactory::new();
-        let mut instruction = Instruction::default();
-        // Analyze the given binary and genereate nessesary tables...
-        self.analyze(code, mode, start_addr);
-        info!("Disassembling at -> 0x{:X} (mode={mode})", start_addr);
-        while decoder.can_decode() {
-            decoder.decode_out(&mut instruction);
-            // let is_cfe = self.is_affecting_cf(&instruction)?;
-            if instruction.is_invalid() {
-                warn!("Found invalid instruction at {}", instruction.ip());
-                let start_index = (instruction.ip() - start_addr) as usize;
-                let instr_bytes = &code[start_index..start_index + instruction.len()];
-                result += &format!(
-                    "loc_{:016X}: {}\n",
-                    instruction.ip(),
-                    to_db_mnemonic(instr_bytes)
+        for inst in acode.code.clone() {
+            if inst.is_invalid() {
+                warn!(
+                    "Inlining invalid instruction bytes at: 0x{:016X}",
+                    inst.ip()
                 );
+                let start_index = (inst.ip() - acode.start_addr) as usize;
+                let instr_bytes = &acode.bytes[start_index..start_index + inst.len()];
+                result += &format!("loc_{:016X}: {}\n", inst.ip(), to_db_mnemonic(instr_bytes));
                 continue;
             }
-
-            let temp = self.format_instruction(&instruction);
-            let nbt = instruction.near_branch_target();
+            let temp = self.format_instruction(&inst);
+            let nbt = inst.near_branch_target();
             if nbt != 0 {
-                if self.is_known_address(nbt) {
+                if acode.is_known_address(nbt) {
                     result += &format!(
                         "loc_{:016X}: {} {}\n",
-                        instruction.ip(),
+                        inst.ip(),
                         temp.split(' ').next().unwrap(),
                         &format!("loc_{:016X}", nbt)
                     );
                     continue;
                 } else {
-                    warn!("Misaligned instruction detected at {}", instruction.ip())
+                    warn!("Misaligned instruction detected at {}", inst.ip())
                 }
             }
-            result += &format!("loc_{:016X}: {}\n", instruction.ip(), temp);
+            result += &format!("loc_{:016X}: {}\n", inst.ip(), temp);
         }
-        self.disassembly = Some(result.clone());
         Ok(result)
     }
 
-    pub fn is_affecting_cf(&self, inst: &Instruction) -> Result<bool, DeoptimizerError> {
-        // First check if the code is analyzed
-        if !self.is_analyzed || self.code_map.is_none() {
-            return Err(DeoptimizerError::MissingCodeAnalysis);
-        }
-        let code_map = self.code_map.clone().unwrap();
-
-        // Check if the instruction exists in self.code
-        if code_map.get(&inst.ip()).is_none() {
-            return Err(DeoptimizerError::InstructionNotFound);
-        }
-
-        let mut rflags = RflagsBits::NONE;
-        let m_rflags = inst.rflags_modified();
-        if m_rflags == RflagsBits::NONE {
-            return Ok(false);
-        }
-
-        let mut cursor = inst.clone();
-        while code_map.get(&cursor.next_ip()).is_some() {
-            cursor = *code_map.get(&cursor.next_ip()).unwrap();
-            rflags = rflags | cursor.rflags_modified();
-            if (cursor.rflags_read() & m_rflags) > 0 {
-                break;
-            }
-            if (m_rflags & rflags) == m_rflags {
-                return Ok(false);
-            }
-        }
-
-        Ok(true)
-    }
-
     pub fn apply_transform(
+        bitness: u32,
         inst: &Instruction,
-        mode: u32,
     ) -> Result<Vec<Instruction>, DeoptimizerError> {
-        if inst.op_count() == 0 {
-            todo!("Perform call proxy...");
-        } else {
+        if inst.op_count() > 1 {
             // Priority is important, start with immidate obfuscation
-            if let Ok(t) = apply_ap_transform(&mut inst.clone()) {
+            if let Ok(t) = apply_ap_transform(bitness, &mut inst.clone()) {
                 return Ok(t);
             }
-            if let Ok(t) = apply_li_transform(&mut inst.clone()) {
+            if let Ok(t) = apply_li_transform(bitness, &mut inst.clone()) {
                 return Ok(t);
             }
-            if let Ok(t) = apply_itr_transform(&mut inst.clone(), mode) {
+            if let Ok(t) = apply_itr_transform(bitness, &mut inst.clone()) {
+                // Clobbers CFLAGS
                 return Ok(t);
             }
             // second target memory obfuscation
-            if let Ok(t) = apply_om_transform(&mut inst.clone(), mode) {
+            if let Ok(t) = apply_om_transform(bitness, &mut inst.clone()) {
                 return Ok(t);
             }
             // Now swap registers
-            if let Ok(t) = apply_rs_transform(&mut inst.clone(), mode) {
+            if let Ok(t) = apply_rs_transform(bitness, &mut inst.clone()) {
                 return Ok(t);
             }
         }
-
         Err(DeoptimizerError::AllTransformsFailed)
     }
 
-    pub fn assemble(
-        &self,
-        code: String,
-        mode: u32,
-        addr: u64,
-    ) -> Result<AsmResult, keystone::Error> {
-        let m = match mode {
-            16 => keystone::MODE_16,
-            32 => keystone::MODE_32,
-            64 => keystone::MODE_64,
-            _ => return Err(keystone::ERR_MODE),
-        };
-        let engine = Keystone::new(keystone::Arch::X86, m)?;
+    pub fn deoptimize(&self, acode: &AnalyzedCode) -> Result<String, DeoptimizerError> {
+        let mut dcode = Vec::new(); // deoptimized code
+                                    // let mut nb_fix_table: HashMap<u64, u64> = HashMap::new();
+                                    // let mut fb_fix_table: HashMap<u64, u64> = HashMap::new();
+        let mut dcode_addr_table = Vec::new();
+        // let mut new_ip: u64 = acode.start_addr;
+        for inst in acode.code.clone() {
+            // if acode.is_near_branch_target(inst.ip()) {
+            //     nb_fix_table.insert(inst.ip(), new_ip);
+            // }
+            // if acode.is_far_branch_target(inst.ip()) {
+            //     fb_fix_table.insert(inst.ip(), new_ip);
+            // }
+            // inst.set_ip(new_ip);
+            if rand::thread_rng().gen_range(0.0..1.0) < self.freq {
+                match Deoptimizer::apply_transform(acode.bitness, &inst) {
+                    Ok(dinst) => {
+                        // new_ip = dcode.last().unwrap().next_ip();
+                        dcode_addr_table.push(dinst.first().unwrap().ip());
+                        dcode = [dcode, dinst.clone()].concat();
+                        continue;
+                    }
+                    Err(e) => debug!("TransformError: {e}"),
+                }
+            }
+            // new_ip = inst.next_ip();
+            dcode_addr_table.push(inst.ip());
+            dcode.push(inst);
+        }
 
-        match self.syntax {
-            AssemblySyntax::Nasm | AssemblySyntax::Keystone => {
-                engine.option(keystone::OptionType::SYNTAX, keystone::OPT_SYNTAX_INTEL)?
+        // let mut dfcode = Vec::new();
+        // for mut inst in dcode.clone() {
+        //     let nbt = inst.near_branch_target();
+        //     if nbt != 0 {
+        //         if let Some(new_nbt) = nb_fix_table.get(&nbt) {
+        //             // info!("{} -> {:X}h ({:?})", inst, new_nbt, inst.op0_kind());
+        //             set_branch_target(&mut inst, *new_nbt)?;
+        //             dfcode.push(inst);
+        //         } else {
+        //             error!("Could not find near branch fix entry for: {}", inst);
+        //         }
+        //         continue;
+        //     }
+        //     match inst.op0_kind() {
+        //         OpKind::FarBranch16 => {
+        //             let fbt = inst.far_branch16();
+        //             if let Some(new_fbt) = fb_fix_table.get(&(fbt as u64)) {
+        //                 info!("{} -> {:X}h ({:?})", inst, new_fbt, inst.op0_kind());
+        //                 set_branch_target(&mut inst, *new_fbt)?;
+        //                 dfcode.push(inst);
+        //             } else {
+        //                 error!("Could not find far branch fix entry for: {}", inst);
+        //             }
+        //             continue;
+        //         }
+        //         OpKind::FarBranch32 => {
+        //             let fbt = inst.far_branch32();
+        //             if let Some(new_fbt) = fb_fix_table.get(&(fbt as u64)) {
+        //                 info!("{} -> {:X}h ({:?})", inst, new_fbt, inst.op0_kind());
+        //                 set_branch_target(&mut inst, *new_fbt)?;
+        //                 dfcode.push(inst);
+        //             } else {
+        //                 error!("Could not find far branch fix entry for: {}", inst);
+        //             }
+        //             continue;
+        //         }
+        //         _ => (),
+        //     }
+        //     dfcode.push(inst);
+        // }
+        //
+        let mut result = String::from(format!("[BITS {}]\n", acode.bitness));
+        for inst in dcode {
+            let temp = self.format_instruction(&inst);
+            let mut i_addr = rand::thread_rng().gen_range(u64::MIN..u64::MAX);
+            let mut label_prefix = "doc";
+            if dcode_addr_table.contains(&inst.ip()) {
+                label_prefix = "loc";
+                i_addr = inst.ip();
             }
-            AssemblySyntax::Masm => {
-                engine.option(keystone::OptionType::SYNTAX, keystone::OPT_SYNTAX_MASM)?
+            let nbt = inst.near_branch_target();
+            if nbt != 0 {
+                result += &format!(
+                    "{}_{:016X}: {} {}\n",
+                    label_prefix,
+                    i_addr,
+                    temp.split(' ').next().unwrap(),
+                    &format!("loc_{:016X}", nbt)
+                );
+                continue;
             }
-            AssemblySyntax::Intel => {
-                engine.option(keystone::OptionType::SYNTAX, keystone::OPT_SYNTAX_INTEL)?
-            }
-            AssemblySyntax::Gas => {
-                engine.option(keystone::OptionType::SYNTAX, keystone::OPT_SYNTAX_GAS)?
-            }
-        };
-        engine.asm(code, addr)
-    }
-}
+            result += &format!("{}_{:016X}: {}\n", label_prefix, i_addr, temp);
+        }
 
-pub fn to_db_mnemonic(bytes: &[u8]) -> String {
-    let mut db_inst = String::from("db ");
-    for b in bytes.iter() {
-        db_inst += &format!("0x{:02X}, ", b);
+        // let mut encoder = Encoder::new(acode.bitness);
+        // let mut buffer = Vec::new();
+        // for inst in dfcode {
+        //     match encoder.encode(&inst, inst.ip()) {
+        //         Ok(_) => buffer = [buffer, encoder.take_buffer()].concat(),
+        //         Err(e) => {
+        //             error!("Encoding failed for -> {}", inst);
+        //             return Err(DeoptimizerError::EncodingFail(e));
+        //         }
+        //     }
+        // }
+        // println!("{}", result);
+        Ok(result)
     }
-    db_inst.trim_end_matches(", ").to_string()
 }
