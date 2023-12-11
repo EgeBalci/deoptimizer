@@ -1,4 +1,5 @@
 use clap::Parser;
+use hex::FromHexError;
 use std::fs;
 use thiserror::Error;
 
@@ -6,6 +7,8 @@ use thiserror::Error;
 pub enum ArgParseError {
     #[error("Target file not found")]
     FileNotFound,
+    #[error("Address parsing failed: {0}")]
+    AddressParseError(#[from] FromHexError),
 }
 
 /// QSocket toolkit options.
@@ -17,6 +20,10 @@ pub struct Options {
     /// target x86 binary file name.
     #[arg(long, short = 'f', default_value_t = String::new())]
     pub file: String,
+
+    /// output file name.
+    #[arg(long, short = 'o', default_value_t = String::new())]
+    pub outfile: String,
 
     /// source assembly file.
     #[arg(long, short = 's', default_value_t = String::new())]
@@ -30,13 +37,17 @@ pub struct Options {
     #[arg(long, short = 'b', default_value_t = 64)]
     pub bitness: u32,
 
+    /// start address in hexadecimal form.
+    #[arg(long, short = 'A', default_value_t = String::new())]
+    pub addr: String,
+
     /// total number of deoptimization cycles.
     #[arg(long, short = 'c', default_value_t = 1)]
     pub cycle: u32,
 
     /// deoptimization frequency.
     #[arg(long, short = 'F', default_value_t = 0.5)]
-    pub freq: f64,
+    pub freq: f32,
 
     /// allow processing of invalid instructions.
     #[arg(long)]
@@ -46,13 +57,19 @@ pub struct Options {
     #[arg(long, short = 'v')]
     pub verbose: bool,
 }
-
 pub fn parse_options() -> Result<Options, ArgParseError> {
     // let mut opts: Options = argh::from_env();
     let opts = Options::parse();
-
     if fs::metadata(opts.file.clone()).is_err() {
         return Err(ArgParseError::FileNotFound);
+    }
+
+    if !opts.addr.is_empty() {
+        let _ = hex::decode(opts.addr.trim_start_matches("0x"))?;
+    }
+
+    if opts.verbose {
+        log::set_max_level(log::LevelFilter::Debug);
     }
 
     Ok(opts)

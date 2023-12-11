@@ -26,12 +26,15 @@ fn main() {
     }
 
     let file = utils::read_file(opts.file.clone()).expect("failed reading target file!");
-    let mut out_file = File::create(opts.source).expect("source file creation failed!");
+    let mut out_file = File::create(opts.outfile).expect("source file creation failed!");
     info!("File size: {}", file.len());
     let mut deopt = x86_64::Deoptimizer::new();
+    deopt.freq = opts.freq;
     deopt.set_syntax(opts.syntax).expect("invalid syntax");
+    let start_addr = u64::from_str_radix(opts.addr.trim_start_matches("0x"), 16)
+        .expect("Start address decoding failed!");
     let acode = deopt
-        .analyze(&file, opts.bitness, 0x401000)
+        .analyze(&file, opts.bitness, start_addr)
         .expect("code analysis failed!");
     // let out = deopt.disassemble(&acode).expect("disassembly failed!");
     // println!("{}", out);
@@ -44,6 +47,6 @@ fn main() {
             return;
         }
     };
-    let _ = out_file.write_all(bytes.as_bytes());
+    let _ = out_file.write_all(&bytes);
     info!("All done!");
 }
