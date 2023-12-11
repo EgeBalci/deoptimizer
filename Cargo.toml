@@ -10,8 +10,9 @@ chrono = "0.4.31"
 clap = { version = "4.4.7", features = ["derive"] }
 colored = "2.0.4"
 ctrlc = "3.4.1"
+hex = "0.4.3"
 hexdump = "0.1.1"
-iced-x86 = "1.20.0"
+iced-x86 = { version = "1.20.0", features = ["code_asm"] }
 log = "0.4.20"
 rand = "0.8.5"
 thiserror = "1.0.50"

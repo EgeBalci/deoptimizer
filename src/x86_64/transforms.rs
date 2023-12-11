@@ -1,4 +1,5 @@
 use crate::x86_64::*;
+use iced_x86::code_asm::*;
 use iced_x86::*;
 use rand::{seq::SliceRandom, Rng};
 use thiserror::Error;
@@ -13,7 +14,7 @@ pub enum TransformError {
     UnexpectedRegisterSize,
     #[error("Unexpected immediate operand size encountered.")]
     UnexpectedImmediateSize,
-    #[error("Invalid processor mode given. (16/32/64 accepted)")]
+    #[error("Invalid processor mode(bitness). (16/32/64 accepted)")]
     InvalidProcessorMode,
     #[error("No GP register found with given parameters.")]
     RegisterNotFound,
@@ -293,22 +294,20 @@ pub fn apply_rs_transform(
     let mut info_factory = InstructionInfoFactory::new();
     let info = info_factory.info(&inst);
 
-    let mut reg_idxs = Vec::new();
-    let mut used_regs = Vec::new();
-    for o in 0..inst.op_count() {
-        if inst.op_kind(o) == OpKind::Register {
-            reg_idxs.push(o)
-        }
-    }
-    for i in reg_idxs {
-        if inst.op_register(i).is_gpr() {
-            used_regs.push((i, inst.op_register(i)));
+    let swap_reg = info
+        .used_registers()
+        .choose(&mut rand::thread_rng())
+        .unwrap()
+        .register();
+    let rand_reg =
+        get_random_gp_register(bitness == 64, swap_reg.size(), Some(info.used_registers()))?;
+
+    for i in 0..inst.op_count() {
+        if inst.op_kind(i) == OpKind::Register && inst.op_register(i) == swap_reg {
+            inst.set_op_register(i, rand_reg);
         }
     }
 
-    let (reg_index, swap_reg) = *used_regs.last().unwrap();
-    let rand_reg =
-        get_random_gp_register(bitness == 64, swap_reg.size(), Some(info.used_registers()))?;
     let xchg = match swap_reg.size() {
         1 => Instruction::with2(Code::Xchg_rm8_r8, swap_reg, rand_reg)?,
         2 => Instruction::with2(Code::Xchg_rm16_r16, swap_reg, rand_reg)?,
@@ -316,11 +315,69 @@ pub fn apply_rs_transform(
         8 => Instruction::with2(Code::Xchg_rm64_r64, swap_reg, rand_reg)?,
         _ => return Err(TransformError::TransformNotPossible),
     };
-    inst.set_op_register(reg_index, rand_reg);
     Ok(encode(bitness, Vec::from([xchg, inst.clone(), xchg]), rip)?)
 }
 
-// Others...
+// Other special cases...
+
+/// Applies condition extention transform.
+pub fn apply_ce_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, TransformError> {
+    if !matches!(
+        inst.mnemonic(),
+        Mnemonic::Jcxz | Mnemonic::Jecxz | Mnemonic::Jrcxz
+    ) && (!inst.is_loopcc() && !inst.is_loop())
+    {
+        return Err(TransformError::TransformNotPossible);
+    }
+
+    let mut asm = CodeAssembler::new(bitness)?;
+    let mut test = match bitness {
+        16 => Instruction::with2(Code::Test_rm16_r16, Register::CX, Register::CX)?,
+        32 => Instruction::with2(Code::Test_rm32_r32, Register::ECX, Register::ECX)?,
+        64 => Instruction::with2(Code::Test_rm64_r64, Register::RCX, Register::RCX)?,
+        _ => return Err(TransformError::InvalidProcessorMode),
+    };
+    test.set_ip(inst.ip());
+
+    if inst.is_loopcc() || inst.is_loop() {
+        match inst.mnemonic() {
+            Mnemonic::Loop => {
+                asm.jz(inst.near_branch_target())?;
+                let insts = asm.instructions();
+                let mut jz = insts.first().unwrap().clone();
+                jz.set_ip(test.next_ip());
+                return Ok(Vec::from([test, jz]));
+            }
+            Mnemonic::Loope => {
+                todo!("...");
+            }
+            Mnemonic::Loopne => {
+                asm.jnz(inst.near_branch_target())?;
+                let insts = asm.instructions();
+                let mut jnz = insts.first().unwrap().clone();
+                jnz.set_ip(test.next_ip());
+                return Ok(Vec::from([test, jnz]));
+            }
+            _ => return Err(TransformError::TransformNotPossible),
+        }
+    }
+
+    if matches!(
+        inst.mnemonic(),
+        Mnemonic::Jrcxz | Mnemonic::Jecxz | Mnemonic::Jcxz
+    ) {
+        asm.jz(inst.near_branch_target())?;
+        let insts = asm.instructions();
+        let mut jz = insts.first().unwrap().clone();
+        jz.set_ip(test.next_ip());
+        return Ok(Vec::from([test, jz]));
+    }
+
+    Err(TransformError::TransformNotPossible)
+}
 
 // /// Applies call proxy instruction transform.
 // pub fn apply_cp_transform(inst_addr: u64, mode: u32) -> Result<(), TransformError> {

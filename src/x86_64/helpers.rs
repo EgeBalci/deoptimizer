@@ -1,5 +1,6 @@
 use crate::x86_64::TransformError;
 use iced_x86::*;
+use log::{debug, error, info, warn};
 use rand::thread_rng;
 use rand::{seq::SliceRandom, Rng};
 
@@ -188,32 +189,47 @@ pub fn set_op1_immediate(inst: &mut Instruction, imm: u64) -> Result<(), Transfo
     Ok(())
 }
 
-pub fn set_branch_target(inst: &mut Instruction, bt: u64) -> Result<(), DeoptimizerError> {
+pub fn set_branch_target(
+    inst: &Instruction,
+    bt: u64,
+    bitness: u32,
+) -> Result<Instruction, DeoptimizerError> {
+    let mut my_inst = inst.clone();
     if matches!(inst.op0_kind(), OpKind::FarBranch16 | OpKind::FarBranch32) {
         if bt < u16::MAX as u64 {
-            inst.set_op0_kind(OpKind::FarBranch16);
-            inst.set_far_branch16(bt as u16);
+            my_inst.set_op0_kind(OpKind::FarBranch16);
+            my_inst.set_far_branch16(bt as u16);
         } else if bt >= u16::MAX as u64 && bt < u32::MAX as u64 {
-            inst.set_op0_kind(OpKind::FarBranch32);
-            inst.set_near_branch32(bt as u32);
+            my_inst.set_op0_kind(OpKind::FarBranch32);
+            my_inst.set_near_branch32(bt as u32);
         } else {
             return Err(DeoptimizerError::FarBranchTooBig);
         }
-        return Ok(());
+        return Ok(my_inst);
     }
-    if bt < u16::MAX as u64 {
-        inst.set_op0_kind(OpKind::NearBranch16);
-        inst.set_near_branch16(bt as u16);
-    } else if bt >= u16::MAX as u64 && bt < u32::MAX as u64 {
-        inst.set_op0_kind(OpKind::NearBranch32);
-        inst.set_near_branch32(bt as u32);
-    } else if bt >= u32::MAX as u64 && bt < u64::MAX {
-        inst.set_op0_kind(OpKind::NearBranch64);
-        inst.set_near_branch64(bt);
-    } else {
-        return Err(DeoptimizerError::NearBranchTooBig);
+
+    match bitness {
+        16 => {
+            my_inst.set_op0_kind(OpKind::NearBranch16);
+            my_inst.set_near_branch16(bt as u16);
+        }
+        32 => {
+            my_inst.set_op0_kind(OpKind::NearBranch32);
+            my_inst.set_near_branch32(bt as u32);
+        }
+        64 => {
+            my_inst.set_op0_kind(OpKind::NearBranch64);
+            my_inst.set_near_branch64(bt);
+        }
+        _ => return Err(DeoptimizerError::InvalidProcessorMode),
     }
-    Ok(())
+
+    let diff = my_inst.next_ip().abs_diff(bt);
+    if diff > i8::MAX as u64 {
+        my_inst.as_near_branch();
+    }
+
+    Ok(my_inst)
 }
 
 pub fn get_random_gp_register(
