@@ -2,8 +2,8 @@ use crate::x86_64::*;
 use iced_x86::code_asm::*;
 use iced_x86::*;
 use log::{debug, error, info, warn};
-use rand::{distributions::uniform::UniformSampler, seq::SliceRandom, Rng};
-use std::{collections::HashMap, error};
+use rand::{seq::SliceRandom, Rng};
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -26,6 +26,8 @@ pub enum DeoptimizerError {
     FarBranchTooBig,
     #[error("Found invalid instruction.")]
     InvalidInstruction,
+    #[error("Branch target not found.")]
+    BracnhTargetNotFound,
     #[error("Instruction encoding failed: {0}")]
     EncodingFail(#[from] IcedError),
 }
@@ -45,8 +47,7 @@ pub struct AnalyzedCode {
     code: Vec<Instruction>,
     addr_map: HashMap<u64, Instruction>,
     known_addr_table: Vec<u64>,
-    near_branch_targets: Vec<u64>,
-    far_branch_targets: Vec<u64>,
+    branch_targets: Vec<u64>,
     cfe_addr_table: Vec<u64>,
 }
 
@@ -54,11 +55,8 @@ impl AnalyzedCode {
     fn is_known_address(&self, addr: u64) -> bool {
         self.known_addr_table.contains(&addr)
     }
-    fn is_near_branch_target(&self, addr: u64) -> bool {
-        self.near_branch_targets.contains(&addr)
-    }
-    fn is_far_branch_target(&self, addr: u64) -> bool {
-        self.far_branch_targets.contains(&addr)
+    fn is_branch_target(&self, addr: u64) -> bool {
+        self.branch_targets.contains(&addr)
     }
     fn get_random_cfe_addr(&self) -> Option<u64> {
         self.cfe_addr_table.choose(&mut rand::thread_rng()).copied()
@@ -138,8 +136,7 @@ impl Deoptimizer {
         let mut decoder = Decoder::with_ip(bitness, bytes, start_addr, DecoderOptions::NONE);
         let mut inst = Instruction::default();
         let mut known_addr_table = Vec::new();
-        let mut near_branch_targets = Vec::new();
-        let mut far_branch_targets = Vec::new();
+        let mut branch_targets = Vec::new();
         let mut cfe_addr_table = Vec::new();
         let mut code = Vec::new();
         let mut addr_map: HashMap<u64, Instruction> = HashMap::new();
@@ -154,22 +151,14 @@ impl Deoptimizer {
             code.push(inst);
             addr_map.insert(inst.ip(), inst);
 
-            if inst.op_count() == 1
-                && matches!(inst.op0_kind(), OpKind::FarBranch16 | OpKind::FarBranch32)
-            {
-                match inst.op0_kind() {
-                    OpKind::FarBranch32 => far_branch_targets.push(inst.far_branch32() as u64),
-                    OpKind::FarBranch16 => far_branch_targets.push(inst.far_branch16() as u64),
-                    _ => (),
-                }
+            let bt = get_branch_target(&inst).unwrap_or(0);
+            if bt != 0 {
+                branch_targets.push(bt);
             }
 
             // Push to known address table
             known_addr_table.push(inst.ip());
-            let nbt = inst.near_branch_target();
-            if nbt != 0 {
-                near_branch_targets.push(nbt);
-            }
+
             // Push to control flow exit address table if it is a JMP of RET
             if inst.mnemonic() == Mnemonic::Ret
                 || inst.mnemonic() == Mnemonic::Retf
@@ -186,8 +175,7 @@ impl Deoptimizer {
             code,
             addr_map,
             known_addr_table,
-            near_branch_targets,
-            far_branch_targets,
+            branch_targets,
             cfe_addr_table,
         })
     }
@@ -265,30 +253,33 @@ impl Deoptimizer {
     pub fn apply_transform(
         bitness: u32,
         inst: &Instruction,
+        freq: f32,
     ) -> Result<Vec<Instruction>, DeoptimizerError> {
         if inst.op_count() > 0 {
             // First handle special cases...
             if let Ok(t) = apply_ce_transform(bitness, &mut inst.clone()) {
                 return Ok(t);
             }
-            // Priority is important, start with immidate obfuscation
-            if let Ok(t) = apply_ap_transform(bitness, &mut inst.clone()) {
-                return Ok(t);
-            }
-            if let Ok(t) = apply_li_transform(bitness, &mut inst.clone()) {
-                return Ok(t);
-            }
-            if let Ok(t) = apply_itr_transform(bitness, &mut inst.clone()) {
-                // Clobbers CFLAGS
-                return Ok(t);
-            }
-            // second target, memory obfuscation
-            if let Ok(t) = apply_om_transform(bitness, &mut inst.clone()) {
-                return Ok(t);
-            }
-            // Now swap registers
-            if let Ok(t) = apply_rs_transform(bitness, &mut inst.clone()) {
-                return Ok(t);
+            if rand::thread_rng().gen_range(0.0..1.0) < freq {
+                // Priority is important, start with immidate obfuscation
+                if let Ok(t) = apply_ap_transform(bitness, &mut inst.clone()) {
+                    return Ok(t);
+                }
+                if let Ok(t) = apply_li_transform(bitness, &mut inst.clone()) {
+                    return Ok(t);
+                }
+                if let Ok(t) = apply_itr_transform(bitness, &mut inst.clone()) {
+                    // Clobbers CFLAGS
+                    return Ok(t);
+                }
+                // second target, memory obfuscation
+                if let Ok(t) = apply_om_transform(bitness, &mut inst.clone()) {
+                    return Ok(t);
+                }
+                // Now swap registers
+                if let Ok(t) = apply_rs_transform(bitness, &mut inst.clone()) {
+                    return Ok(t);
+                }
             }
         }
         Err(DeoptimizerError::AllTransformsFailed)
@@ -296,126 +287,73 @@ impl Deoptimizer {
 
     pub fn deoptimize(&self, acode: &AnalyzedCode) -> Result<Vec<u8>, DeoptimizerError> {
         let mut step1 = Vec::new(); // deoptimized code
-        let mut nb_fix_table: HashMap<u64, usize> = HashMap::new();
-        let mut fb_fix_table: HashMap<u64, usize> = HashMap::new();
+        let mut bt_fix_table: HashMap<u64, usize> = HashMap::new();
+        let mut final_fix_table: HashMap<usize, usize> = HashMap::new();
         let mut new_ip: u64 = acode.start_addr;
         for mut inst in acode.code.clone() {
-            if acode.is_near_branch_target(inst.ip()) {
-                // warn!("NB 0x{:X} -> 0x{:X}", inst.ip(), new_ip);
-                nb_fix_table.insert(inst.ip(), step1.len() + 1);
-            }
-            if acode.is_far_branch_target(inst.ip()) {
-                // warn!("FB 0x{:X} -> 0x{:X}", inst.ip(), new_ip);
-                fb_fix_table.insert(inst.ip(), step1.len() + 1);
+            if acode.is_branch_target(inst.ip()) {
+                // warn!("BT 0x{:X} -> 0x{:X}", inst.ip(), new_ip);
+                bt_fix_table.insert(inst.ip(), step1.len());
             }
             inst.set_ip(new_ip);
-            if rand::thread_rng().gen_range(0.0..1.0) < self.freq {
-                match Deoptimizer::apply_transform(acode.bitness, &inst) {
-                    Ok(dinst) => {
-                        new_ip = dinst.last().unwrap().next_ip();
-                        step1 = [step1, dinst.clone()].concat();
-                        continue;
-                    }
-                    Err(e) => debug!("TransformError: {e} => [{}]", inst),
+            match Deoptimizer::apply_transform(acode.bitness, &inst, self.freq) {
+                Ok(dinst) => {
+                    new_ip = dinst.last().unwrap().next_ip();
+                    step1 = [step1, dinst.clone()].concat();
+                    continue;
                 }
+                Err(e) => debug!("TransformError: {e} => [{}]", inst),
             }
             new_ip = inst.next_ip();
             step1.push(inst);
         }
 
-        let mut step2 = step1.clone();
-        new_ip = acode.start_addr;
         for (i, inst) in step1.iter().enumerate() {
-            let mut my_inst = inst.clone();
-            let nbt = inst.near_branch_target();
-            if nbt != 0 {
-                if let Some(idx) = nb_fix_table.get(&nbt) {
-                    debug!("Adjusting NBT: 0x{:X} -> 0x{:X}", nbt, step1[*idx].ip());
-                    my_inst.set_ip(new_ip);
-                    step2[i] = set_branch_target(&my_inst, step1[*idx].ip(), acode.bitness)?;
-                    new_ip = my_inst.next_ip();
+            let bt = get_branch_target(inst).unwrap_or(0);
+            if bt != 0 {
+                if let Some(idx) = bt_fix_table.get(&bt) {
+                    final_fix_table.insert(i, *idx);
+                    debug!("{:016X} {} >> {}", inst.ip(), inst, step1[*idx]);
                 } else {
-                    error!("Could not find near branch fix entry for: {}", inst);
+                    error!("Could not find branch fix entry for: {}", inst);
                 }
                 continue;
-            }
-            match inst.op0_kind() {
-                OpKind::FarBranch16 => {
-                    let fbt = inst.far_branch16();
-                    if let Some(idx) = fb_fix_table.get(&(fbt as u64)) {
-                        debug!("Adjusting FBT: 0x{:X} -> 0x{:X}", fbt, step1[*idx].ip());
-                        my_inst.set_ip(new_ip);
-                        step2[i] = set_branch_target(&my_inst, step1[*idx].ip(), acode.bitness)?;
-                        new_ip = my_inst.next_ip();
-                    } else {
-                        error!("Could not find far branch fix entry for: {}", inst);
-                    }
-                    continue;
-                }
-                OpKind::FarBranch32 => {
-                    let fbt = inst.far_branch32();
-                    if let Some(idx) = fb_fix_table.get(&(fbt as u64)) {
-                        debug!("Adjusting FBT: 0x{:X} -> 0x{:X}", fbt, step1[*idx].ip());
-                        my_inst.set_ip(new_ip);
-                        step2[i] = set_branch_target(&my_inst, step1[*idx].ip(), acode.bitness)?;
-                        new_ip = my_inst.next_ip();
-                    } else {
-                        error!("Could not find far branch fix entry for: {}", inst);
-                    }
-                    continue;
-                }
-                _ => (),
             }
         }
 
-        let mut step2 = step1.clone();
-        new_ip = acode.start_addr;
-        for (i, inst) in step1.iter().enumerate() {
-            let mut my_inst = inst.clone();
-            let nbt = inst.near_branch_target();
-            if nbt != 0 {
-                if let Some(idx) = nb_fix_table.get(&nbt) {
-                    debug!("Adjusting NBT: 0x{:X} -> 0x{:X}", nbt, step1[*idx].ip());
-                    my_inst.set_ip(new_ip);
-                    step2[i] = set_branch_target(&my_inst, step1[*idx].ip(), acode.bitness)?;
-                    new_ip = my_inst.next_ip();
-                } else {
-                    error!("Could not find near branch fix entry for: {}", inst);
+        let mut fin_address = step1.last().unwrap().ip();
+        loop {
+            warn!("============ adjusting branch targets ===========");
+            for i in 0..step1.len() {
+                if final_fix_table.contains_key(&i) {
+                    if let Some(idx) = final_fix_table.get(&i) {
+                        debug!(
+                            "Adjusting BT: 0x{:X} -> 0x{:X} {}",
+                            step1[i].ip(),
+                            step1[*idx].ip(),
+                            step1[*idx]
+                        );
+                        step1[i] = set_branch_target(
+                            &mut step1[i].clone(),
+                            step1[*idx].ip(),
+                            acode.bitness,
+                        )?;
+                        adjust_instruction_addr(&mut step1, acode.start_addr);
+                    } else {
+                        error!("Could not find branch fix entry for: {}", step1[i]);
+                    }
                 }
-                continue;
             }
-            match inst.op0_kind() {
-                OpKind::FarBranch16 => {
-                    let fbt = inst.far_branch16();
-                    if let Some(idx) = fb_fix_table.get(&(fbt as u64)) {
-                        debug!("Adjusting FBT: 0x{:X} -> 0x{:X}", fbt, step1[*idx].ip());
-                        my_inst.set_ip(new_ip);
-                        step2[i] = set_branch_target(&my_inst, step1[*idx].ip(), acode.bitness)?;
-                        new_ip = my_inst.next_ip();
-                    } else {
-                        error!("Could not find far branch fix entry for: {}", inst);
-                    }
-                    continue;
-                }
-                OpKind::FarBranch32 => {
-                    let fbt = inst.far_branch32();
-                    if let Some(idx) = fb_fix_table.get(&(fbt as u64)) {
-                        debug!("Adjusting FBT: 0x{:X} -> 0x{:X}", fbt, step1[*idx].ip());
-                        my_inst.set_ip(new_ip);
-                        step2[i] = set_branch_target(&my_inst, step1[*idx].ip(), acode.bitness)?;
-                        new_ip = my_inst.next_ip();
-                    } else {
-                        error!("Could not find far branch fix entry for: {}", inst);
-                    }
-                    continue;
-                }
-                _ => (),
+            if step1.last().unwrap().ip() == fin_address {
+                break;
+            } else {
+                fin_address = step1.last().unwrap().ip();
             }
         }
 
         let mut encoder = Encoder::new(acode.bitness);
         let mut buffer = Vec::new();
-        for inst in step2.clone() {
+        for inst in step1.clone() {
             match encoder.encode(&inst, inst.ip()) {
                 Ok(_) => buffer = [buffer, encoder.take_buffer()].concat(),
                 Err(e) => {

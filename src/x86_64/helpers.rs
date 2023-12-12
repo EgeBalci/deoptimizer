@@ -19,6 +19,14 @@ pub fn randomize_immediate_value(imm: u64) -> u64 {
     }
 }
 
+pub fn adjust_instruction_addr(code: &mut Vec<Instruction>, start_addr: u64) {
+    let mut new_ip = start_addr;
+    for inst in code.iter_mut() {
+        inst.set_ip(new_ip);
+        new_ip = inst.next_ip();
+    }
+}
+
 pub fn encode(
     bitness: u32,
     insts: Vec<Instruction>,
@@ -195,6 +203,7 @@ pub fn set_branch_target(
     bitness: u32,
 ) -> Result<Instruction, DeoptimizerError> {
     let mut my_inst = inst.clone();
+
     if matches!(inst.op0_kind(), OpKind::FarBranch16 | OpKind::FarBranch32) {
         if bt < u16::MAX as u64 {
             my_inst.set_op0_kind(OpKind::FarBranch16);
@@ -205,7 +214,9 @@ pub fn set_branch_target(
         } else {
             return Err(DeoptimizerError::FarBranchTooBig);
         }
-        return Ok(my_inst);
+        return Ok(*encode(bitness, Vec::from([my_inst]), my_inst.ip())?
+        .first()
+        .unwrap());
     }
 
     match bitness {
@@ -229,7 +240,22 @@ pub fn set_branch_target(
         my_inst.as_near_branch();
     }
 
-    Ok(my_inst)
+    Ok(*encode(bitness, Vec::from([my_inst]), my_inst.ip())?
+        .first()
+        .unwrap())
+}
+
+pub fn get_branch_target(inst: &Instruction) -> Result<u64, DeoptimizerError> {
+    let nbt = inst.near_branch_target();
+    if nbt != 0 {
+        return Ok(nbt);
+    }
+
+    Ok(match inst.op0_kind() {
+        OpKind::FarBranch32 => inst.far_branch32() as u64,
+        OpKind::FarBranch16 => inst.far_branch16() as u64,
+        _ => return Err(DeoptimizerError::BracnhTargetNotFound),
+    })
 }
 
 pub fn get_random_gp_register(
