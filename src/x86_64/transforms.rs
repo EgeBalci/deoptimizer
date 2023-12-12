@@ -1,6 +1,7 @@
 use crate::x86_64::*;
 use iced_x86::code_asm::*;
 use iced_x86::*;
+use log::error;
 use rand::{seq::SliceRandom, Rng};
 use thiserror::Error;
 
@@ -46,12 +47,27 @@ pub fn apply_ap_transform(
     } else {
         set_op1_immediate(inst, rand_imm_val)?;
         if imm > rand_imm_val {
-            fix_inst.set_code(get_code_with_template(Mnemonic::Add, inst)?);
-            set_op1_immediate(&mut fix_inst, imm_delta)?;
+            match inst.mnemonic() {
+                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Add, inst)?)
+                }
+                Mnemonic::Sub | Mnemonic::Sbb => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Sub, inst)?)
+                }
+                _ => return Err(TransformError::TransformNotPossible),
+            }
         } else {
-            fix_inst.set_code(get_code_with_template(Mnemonic::Sub, inst)?);
-            set_op1_immediate(&mut fix_inst, imm_delta)?;
+            match inst.mnemonic() {
+                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Sub, inst)?)
+                }
+                Mnemonic::Sub | Mnemonic::Sbb => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Add, inst)?)
+                }
+                _ => return Err(TransformError::TransformNotPossible),
+            }
         }
+        set_op1_immediate(&mut fix_inst, imm_delta)?;
     }
 
     if inst.mnemonic() == Mnemonic::Mov {
@@ -198,6 +214,7 @@ pub fn apply_om_transform(
         .contains(&OpKind::Memory)
         || base_reg.is_segment_register()
         || base_reg.is_vector_register()
+        || inst.is_stack_instruction()
     {
         return Err(TransformError::TransformNotPossible);
     }
@@ -272,9 +289,11 @@ pub fn apply_rs_transform(
         .op_kinds()
         .collect::<Vec<OpKind>>()
         .contains(&OpKind::Register)
+        || inst.is_stack_instruction()
     {
         return Err(TransformError::TransformNotPossible);
     }
+
     // We need to fix the code if it is spesific to any register
     if is_using_static_register(inst) && is_immediate_operand(inst.op1_kind()) {
         if let Ok(code) = get_code_with_template(inst.mnemonic(), inst) {
@@ -349,7 +368,7 @@ pub fn apply_ce_transform(
                 let insts = asm.instructions();
                 let mut jz = insts.first().unwrap().clone();
                 jz.set_ip(test.next_ip());
-                return Ok(Vec::from([test, jz]));
+                return Ok(encode(bitness, Vec::from([test, jz]), inst.ip())?);
             }
             Mnemonic::Loope => {
                 todo!("...");
@@ -359,7 +378,7 @@ pub fn apply_ce_transform(
                 let insts = asm.instructions();
                 let mut jnz = insts.first().unwrap().clone();
                 jnz.set_ip(test.next_ip());
-                return Ok(Vec::from([test, jnz]));
+                return Ok(encode(bitness, Vec::from([test, jnz]), inst.ip())?);
             }
             _ => return Err(TransformError::TransformNotPossible),
         }
@@ -373,7 +392,7 @@ pub fn apply_ce_transform(
         let insts = asm.instructions();
         let mut jz = insts.first().unwrap().clone();
         jz.set_ip(test.next_ip());
-        return Ok(Vec::from([test, jz]));
+        return Ok(encode(bitness, Vec::from([test, jz]), inst.ip())?);
     }
 
     Err(TransformError::TransformNotPossible)
