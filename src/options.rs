@@ -15,7 +15,7 @@ pub enum ArgParseError {
 #[derive(Parser, Debug)]
 #[command(name = "Deoptimizer")]
 #[command(version = "1.0.0")]
-#[command(about = "Deoptimizer.", long_about = None)]
+#[command(about = "Machine code deoptimizer.", long_about = None)]
 pub struct Options {
     /// target x86 binary file name.
     #[arg(long, short = 'f', default_value_t = String::new())]

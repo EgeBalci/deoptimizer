@@ -1,0 +1,475 @@
+use crate::x86_64::*;
+use iced_x86::code_asm::*;
+use iced_x86::*;
+use rand::{seq::SliceRandom, Rng};
+
+// Immidiate Obfuscation Transforms
+
+/// Applies arithmetic partitioning transform to given instruction.
+pub fn apply_ap_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    if !is_ap_compatible(inst) || !is_immediate_operand(inst.op1_kind()) || inst.op_count() != 2 {
+        return Err(DeoptimizerError::TransformNotPossible);
+    }
+    // We are looking for MOV (=) ADD/ADC (+) SUB/SBB (-)
+    let rip = inst.ip();
+    let imm = inst.immediate(1);
+    let rand_imm_val = randomize_immediate_value(imm);
+    let imm_delta: u64 = rand_imm_val.abs_diff(imm);
+    let mut fix_inst = inst.clone();
+    if inst.mnemonic() == Mnemonic::Mov && inst.op1_kind() == OpKind::Immediate64 {
+        set_op1_immediate(inst, !imm)?;
+        fix_inst = Instruction::with1(
+            get_code_with_size(Mnemonic::Not, 8, 0)?,
+            inst.op0_register(),
+        )?;
+    } else {
+        set_op1_immediate(inst, rand_imm_val)?;
+        if imm > rand_imm_val {
+            match inst.mnemonic() {
+                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Add, inst)?)
+                }
+                Mnemonic::Sub | Mnemonic::Sbb => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Sub, inst)?)
+                }
+                _ => return Err(DeoptimizerError::TransformNotPossible),
+            }
+        } else {
+            match inst.mnemonic() {
+                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Sub, inst)?)
+                }
+                Mnemonic::Sub | Mnemonic::Sbb => {
+                    fix_inst.set_code(get_code_with_template(Mnemonic::Add, inst)?)
+                }
+                _ => return Err(DeoptimizerError::TransformNotPossible),
+            }
+        }
+        set_op1_immediate(&mut fix_inst, imm_delta)?;
+    }
+    Ok(rencode(bitness, [*inst, fix_inst].to_vec(), rip)?)
+}
+
+/// Applies logical inverse transform to given instruction.
+pub fn apply_li_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    if !is_li_compatible(inst) || !is_immediate_operand(inst.op1_kind()) || inst.op_count() != 2 {
+        return Err(DeoptimizerError::TransformNotPossible);
+    }
+    // We are looking for XOR (^) AND (&) OR (|)
+    let rip = inst.ip();
+    let mnemonic = inst.mnemonic();
+    let imm = inst.immediate(1);
+    if imm == 0 {
+        // Unlikely but possible...
+        return Ok(Vec::from([Instruction::with(Code::Nopd)]));
+    }
+
+    let result = match mnemonic {
+        Mnemonic::Xor => {
+            set_op1_immediate(inst, !imm)?;
+            let mut not = inst.clone();
+            not.set_code(get_code_with_template(Mnemonic::Not, inst)?);
+            [not, *inst].to_vec()
+        }
+        Mnemonic::And => {
+            let mut or = inst.clone();
+            or.set_code(get_code_with_template(Mnemonic::Or, inst)?);
+            set_op1_immediate(&mut or, !imm)?;
+            let mut not = inst.clone();
+            not.set_code(get_code_with_template(Mnemonic::Not, inst)?);
+            [not, or, not].to_vec()
+        }
+        Mnemonic::Or => {
+            let mut and = inst.clone();
+            and.set_code(get_code_with_template(Mnemonic::And, inst)?);
+            set_op1_immediate(&mut and, !imm)?;
+            let mut not = inst.clone();
+            not.set_code(get_code_with_template(Mnemonic::Not, inst)?);
+            [not, and, not].to_vec()
+        }
+        _ => return Err(DeoptimizerError::TransformNotPossible),
+    };
+    Ok(rencode(bitness, result, rip)?)
+}
+
+/// Applies logical partitioning transform to given instruction.
+pub fn apply_lp_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    if !is_lp_compatible(inst) || !is_immediate_operand(inst.op1_kind()) || inst.op_count() != 2 {
+        return Err(DeoptimizerError::TransformNotPossible);
+    }
+    // We are looking for SHR/SAR (>) SHL/SAL (<) ROR/RCR (>>) ROL/RCL (<<)
+    let rip = inst.ip();
+    let mnemonic = inst.mnemonic();
+    let mut imm = inst.immediate(1);
+    let op0_size = get_op_size(0, inst)?;
+    if imm == 0 {
+        // Unlikely but possible...
+        return Ok(Vec::from([Instruction::with(Code::Nopd)]));
+    }
+    let result = match mnemonic {
+        Mnemonic::Shr | Mnemonic::Sar | Mnemonic::Shl | Mnemonic::Sal => {
+            if imm == 1 {
+                // This is simple x2 or /2
+                match mnemonic {
+                    Mnemonic::Shr | Mnemonic::Sar => {
+                        let mut and = inst.clone();
+                        and.set_code(get_code_with_size(Mnemonic::And, op0_size, op0_size)?);
+                        let new_imm = u64::pow(2, (op0_size * 8) as u32 - 1) + 1;
+                        match op0_size {
+                            1 => {
+                                and.set_immediate8(new_imm as u8);
+                                and.set_op1_kind(OpKind::Immediate8);
+                            }
+                            2 => {
+                                and.set_immediate16(new_imm as u16);
+                                and.set_op1_kind(OpKind::Immediate16);
+                            }
+                            4 => {
+                                and.set_immediate32(new_imm as u32);
+                                and.set_op1_kind(OpKind::Immediate32);
+                            }
+                            8 => {
+                                and.set_immediate32to64(-2);
+                                and.set_op1_kind(OpKind::Immediate32to64);
+                            }
+                            _ => return Err(DeoptimizerError::TransformNotPossible),
+                        }
+                        if mnemonic == Mnemonic::Shr {
+                            inst.set_code(get_code_with_template(Mnemonic::Ror, inst)?);
+                            [and, *inst].to_vec()
+                        } else {
+                            inst.set_code(get_code_with_template(Mnemonic::Rcr, inst)?);
+                            [and, *inst].to_vec()
+                        }
+                    }
+                    Mnemonic::Shl => {
+                        let add_code = match op0_size {
+                            1 => Code::Add_rm8_r8,
+                            2 => Code::Add_rm16_r16,
+                            4 => Code::Add_rm32_r32,
+                            8 => Code::Add_rm64_r64,
+                            _ => return Err(DeoptimizerError::TransformNotPossible),
+                        };
+                        let add =
+                            Instruction::with2(add_code, inst.op0_register(), inst.op0_register())?;
+                        [add].to_vec()
+                    }
+                    Mnemonic::Sal => {
+                        let adc_code = match op0_size {
+                            1 => Code::Adc_rm8_r8,
+                            2 => Code::Adc_rm16_r16,
+                            4 => Code::Adc_rm32_r32,
+                            8 => Code::Adc_rm64_r64,
+                            _ => return Err(DeoptimizerError::TransformNotPossible),
+                        };
+                        let adc =
+                            Instruction::with2(adc_code, inst.op0_register(), inst.op0_register())?;
+                        [adc].to_vec()
+                    }
+                    _ => return Err(DeoptimizerError::TransformNotPossible),
+                }
+            } else {
+                if imm.is_power_of_two() {
+                    let mut shift1 = inst.clone();
+                    let mut shift2 = inst.clone();
+                    shift1.set_immediate8(imm as u8 / 2);
+                    shift2.set_immediate8(imm as u8 / 2);
+                    [shift1, shift2].to_vec()
+                } else {
+                    let mut shift1 = inst.clone();
+                    let mut shift2 = inst.clone();
+                    shift1.set_immediate8(((imm - 1) as u8 / 2) + 1);
+                    shift2.set_immediate8((imm - 1) as u8 / 2);
+                    [shift1, shift2].to_vec()
+                }
+            }
+        }
+        Mnemonic::Ror | Mnemonic::Rcr | Mnemonic::Rol | Mnemonic::Rcl => {
+            let dst_op_size = match inst.op0_kind() {
+                OpKind::Memory => (inst.memory_size().element_size() * 8) as u64,
+                OpKind::Register => (inst.op0_register().size() * 8) as u64,
+                _ => return Err(DeoptimizerError::InvalidTemplate),
+            };
+            imm = imm % dst_op_size;
+            let pow = rand::thread_rng().gen_range(2..(u8::MAX as u64 / dst_op_size) as u8);
+            inst.set_immediate8((dst_op_size * pow as u64 + imm) as u8);
+            [*inst].to_vec()
+        }
+        _ => return Err(DeoptimizerError::TransformNotPossible),
+    };
+    Ok(rencode(bitness, result, rip)?)
+}
+
+/// Applies immidiate-to-register transform to given instruction.
+pub fn apply_itr_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    if inst.is_stack_instruction() {
+        return Err(DeoptimizerError::TransformNotPossible);
+    }
+    let idxs = match get_immediate_indexes(inst) {
+        Some(i) => i,
+        None => return Err(DeoptimizerError::TransformNotPossible),
+    };
+
+    let rip = inst.ip();
+    let mut info_factory = InstructionInfoFactory::new();
+    let info = info_factory.info(&inst);
+    let reg_size = get_op_size(*idxs.first().unwrap(), inst)?;
+    let rand_reg = get_random_gp_register(
+        bitness == 64,
+        reg_size as usize,
+        Some(info.used_registers()),
+    )?;
+    let (reg_save_pre, reg_save_post) = get_register_save_seq(rand_reg)?;
+
+    let mut mov = match rand_reg.size() {
+        4 => Instruction::with2(
+            Code::Mov_rm32_imm32,
+            rand_reg,
+            inst.immediate(*idxs.first().unwrap()),
+        )?,
+        8 => Instruction::with2(
+            Code::Mov_r64_imm64,
+            rand_reg,
+            inst.immediate(*idxs.first().unwrap()),
+        )?,
+        _ => return Err(DeoptimizerError::UnexpectedRegisterSize),
+    };
+    // Obfuscate mov...
+    println!("rand-reg: {:?}", rand_reg);
+    let obs_mov = apply_ap_transform(bitness, &mut mov)?;
+    inst.set_op_kind(*idxs.first().unwrap(), OpKind::Register);
+    inst.set_op_register(*idxs.first().unwrap(), rand_reg);
+    let new_code = format!("{:?}", inst.code())
+        .replace("rm", "r")
+        .replace("imm", "rm");
+    println!("new code: {new_code}");
+    inst.set_code(get_code_with_str(&new_code));
+    let mut result = [[reg_save_pre].to_vec(), obs_mov].concat();
+    result.push(*inst);
+    result.push(reg_save_post);
+    Ok(rencode(bitness, result, rip)?)
+}
+// Memory Obfuscation Transforms
+
+/// Applies offset mutation to given instruction.
+/// Note: This transform may clobber the CFLAGS!
+/// avoid using with CF altering instructions.
+pub fn apply_om_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    // First check the operand types.
+    let base_reg = inst.memory_base();
+    if !inst
+        .op_kinds()
+        .collect::<Vec<OpKind>>()
+        .contains(&OpKind::Memory)
+        || base_reg.is_segment_register()
+        || base_reg.is_vector_register()
+        || inst.is_stack_instruction()
+    {
+        return Err(DeoptimizerError::TransformNotPossible);
+    }
+    let rip = inst.ip();
+    let mem_disp = inst.memory_displacement64();
+    if base_reg == Register::None {
+        let mut ifac = InstructionInfoFactory::new();
+        let info = ifac.info(inst);
+        let rand_reg = get_random_gp_register(
+            bitness == 64,
+            (bitness / 8) as usize,
+            Some(info.used_registers()),
+        )?;
+        let (reg_save_pre, reg_save_suf) = get_register_save_seq(rand_reg)?;
+        inst.set_memory_base(rand_reg);
+        inst.set_memory_displacement64(0);
+        inst.set_memory_displ_size(0);
+        inst.set_memory_index(Register::None);
+        inst.set_segment_prefix(Register::None);
+        // This case is spesific to mov instruction
+        let opc0 = inst.code().op_code().op0_kind();
+        let opc1 = inst.code().op_code().op1_kind();
+        let op0_size = get_op_size(0, inst)? * 8;
+        let op1_size = get_op_size(1, inst)? * 8;
+        if opc0 == OpCodeOperandKind::mem_offs {
+            inst.set_code(get_code_with_str(&format!("Mov_rm{op0_size}_r{op1_size}")));
+        }
+        if opc1 == OpCodeOperandKind::mem_offs {
+            inst.set_code(get_code_with_str(&format!("Mov_r{op0_size}_rm{op1_size}")));
+        }
+
+        let mut mov = match bitness {
+            16 => Instruction::with2(Code::Mov_rm16_imm16, rand_reg, mem_disp)?,
+            32 => Instruction::with2(Code::Mov_rm32_imm32, rand_reg, mem_disp)?,
+            64 => Instruction::with2(Code::Mov_r64_imm64, rand_reg, mem_disp)?,
+            _ => return Err(DeoptimizerError::UnexpectedRegisterSize),
+        };
+        let movs = apply_ap_transform(bitness, &mut mov)?;
+        let mut result = [reg_save_pre].to_vec();
+        result = [result, movs].concat();
+        result.push(*inst);
+        result.push(reg_save_suf);
+        Ok(rencode(bitness, result, rip)?)
+    } else {
+        let rnd_reg_val = get_random_register_value(base_reg);
+        let (c1, c2) = match (mem_disp as i32) < 0 {
+            true => (
+                get_code_with_size(Mnemonic::Add, base_reg.size(), base_reg.size())?,
+                get_code_with_size(Mnemonic::Sub, base_reg.size(), base_reg.size())?,
+            ),
+            false => (
+                get_code_with_size(Mnemonic::Sub, base_reg.size(), base_reg.size())?,
+                get_code_with_size(Mnemonic::Add, base_reg.size(), base_reg.size())?,
+            ),
+        };
+        let mut pre_inst = Instruction::with2(c1, base_reg, 0)?;
+        set_op1_immediate(&mut pre_inst, rnd_reg_val)?;
+        let mut post_inst = Instruction::with2(c2, base_reg, 0)?;
+        set_op1_immediate(&mut post_inst, rnd_reg_val)?;
+        let new_disply = mem_disp.abs_diff(rnd_reg_val); // This is not right!!!
+        inst.set_memory_displ_size(base_reg.size() as u32);
+        inst.set_memory_displacement64(new_disply as u64);
+
+        Ok(rencode(
+            bitness,
+            [pre_inst, inst.clone(), post_inst].to_vec(),
+            rip,
+        )?)
+    }
+}
+
+// Register Obfuscation Transforms
+/// Applies register swapping transform to given instruction.
+pub fn apply_rs_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    if !inst
+        .op_kinds()
+        .collect::<Vec<OpKind>>()
+        .contains(&OpKind::Register)
+        || inst.is_stack_instruction()
+    {
+        return Err(DeoptimizerError::TransformNotPossible);
+    }
+
+    // We need to fix the code if it is spesific to any register
+    if is_using_fixed_register(inst) && is_immediate_operand(inst.op1_kind()) {
+        if let Ok(code) = get_code_with_template(inst.mnemonic(), inst) {
+            inst.set_code(code);
+            match inst.op0_register().size() {
+                1 => inst.set_op1_kind(OpKind::Immediate8),
+                2 => inst.set_op1_kind(OpKind::Immediate16),
+                4 => inst.set_op1_kind(OpKind::Immediate32),
+                8 => inst.set_op1_kind(OpKind::Immediate64), // This may actually fail
+                _ => return Err(DeoptimizerError::UnexpectedRegisterSize),
+            }
+        } else {
+            return Err(DeoptimizerError::TransformNotPossible);
+        }
+    }
+    let rip = inst.ip();
+    let mut info_factory = InstructionInfoFactory::new();
+    let info = info_factory.info(&inst);
+
+    let mut used_regs = Vec::new();
+    for r in info.used_registers() {
+        if r.register().is_segment_register() {
+            continue;
+        }
+        used_regs.push(r.register());
+    }
+    let swap_reg = *used_regs.choose(&mut rand::thread_rng()).unwrap();
+    let rand_reg =
+        get_random_gp_register(bitness == 64, swap_reg.size(), Some(info.used_registers()))?;
+    for i in 0..inst.op_count() {
+        if inst.op_kind(i) == OpKind::Register && inst.op_register(i) == swap_reg {
+            inst.set_op_register(i, rand_reg);
+        }
+    }
+
+    let xchg_code = get_code_with_size(Mnemonic::Xchg, swap_reg.size(), rand_reg.size())?;
+    let xchg = Instruction::with2(xchg_code, swap_reg, rand_reg)?;
+
+    Ok(rencode(bitness, [xchg, inst.clone(), xchg].to_vec(), rip)?)
+}
+
+// Other special cases...
+
+/// Applies condition extention transform.
+pub fn apply_ce_transform(
+    bitness: u32,
+    inst: &mut Instruction,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    if !is_ce_compatible(inst) {
+        return Err(DeoptimizerError::TransformNotPossible);
+    }
+    let mut asm = CodeAssembler::new(bitness)?;
+    let mut test = match bitness {
+        16 => Instruction::with2(Code::Test_rm16_r16, Register::CX, Register::CX)?,
+        32 => Instruction::with2(Code::Test_rm32_r32, Register::ECX, Register::ECX)?,
+        64 => Instruction::with2(Code::Test_rm64_r64, Register::RCX, Register::RCX)?,
+        _ => return Err(DeoptimizerError::InvalidProcessorMode),
+    };
+    // test.set_ip(inst.ip());
+    test = *rencode(bitness, [test].to_vec(), inst.ip())?
+        .first()
+        .unwrap();
+    let bt = inst.near_branch_target();
+
+    if inst.is_loopcc() || inst.is_loop() {
+        match inst.mnemonic() {
+            Mnemonic::Loop => {
+                asm.jz(bt)?;
+                let insts = asm.instructions();
+                let mut jz = insts.first().unwrap().clone();
+                jz.set_ip(test.next_ip());
+                jz.as_near_branch();
+                return Ok(rencode(bitness, [test, jz].to_vec(), inst.ip())?);
+            }
+            Mnemonic::Loope => {
+                todo!("Implement loope transform case...");
+            }
+            Mnemonic::Loopne => {
+                asm.jnz(bt)?;
+                let insts = asm.instructions();
+                let mut jnz = insts.first().unwrap().clone();
+                jnz.set_ip(test.next_ip());
+                jnz.as_near_branch();
+                return Ok(rencode(bitness, [test, jnz].to_vec(), inst.ip())?);
+            }
+            _ => return Err(DeoptimizerError::TransformNotPossible),
+        }
+    }
+
+    if matches!(
+        inst.mnemonic(),
+        Mnemonic::Jrcxz | Mnemonic::Jecxz | Mnemonic::Jcxz
+    ) {
+        asm.jz(bt)?;
+        let insts = asm.instructions();
+        let mut jz = insts.first().unwrap().clone();
+        jz.set_ip(test.next_ip());
+        jz.as_near_branch();
+        return Ok(rencode(bitness, [test, jz].to_vec(), inst.ip())?);
+    }
+
+    Err(DeoptimizerError::TransformNotPossible)
+}
+
+// /// Applies call proxy instruction transform.
+// pub fn apply_cp_transform(inst_addr: u64, mode: u32) -> Result<(), DeoptimizerError> {
+//     todo!("...")
+// }

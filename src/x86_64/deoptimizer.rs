@@ -1,7 +1,7 @@
 use crate::x86_64::*;
 use iced_x86::code_asm::*;
 use iced_x86::*;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use rand::{seq::SliceRandom, Rng};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -28,6 +28,18 @@ pub enum DeoptimizerError {
     InvalidInstruction,
     #[error("Branch target not found.")]
     BracnhTargetNotFound,
+    #[error("This transform not possible for given instruction.")]
+    TransformNotPossible,
+    #[error("Unexpected memory size given.")]
+    UnexpectedMemorySize,
+    #[error("Unexpected register size given.")]
+    UnexpectedRegisterSize,
+    #[error("Unexpected operand type encountered.")]
+    UnexpectedOperandType,
+    #[error("No GP register found with given parameters.")]
+    RegisterNotFound,
+    #[error("Invalid instruction template.")]
+    InvalidTemplate,
     #[error("Instruction encoding failed: {0}")]
     EncodingFail(#[from] IcedError),
 }
@@ -255,44 +267,60 @@ impl Deoptimizer {
         inst: &Instruction,
         freq: f32,
     ) -> Result<Vec<Instruction>, DeoptimizerError> {
-        if inst.op_count() > 0 {
-            // First handle special cases...
-            if let Ok(t) = apply_ce_transform(bitness, &mut inst.clone()) {
-                return Ok(t);
-            }
-            if rand::thread_rng().gen_range(0.0..1.0) < freq {
-                // Priority is important, start with immidate obfuscation
-                if let Ok(t) = apply_ap_transform(bitness, &mut inst.clone()) {
-                    return Ok(t);
-                }
-                if let Ok(t) = apply_li_transform(bitness, &mut inst.clone()) {
-                    return Ok(t);
-                }
-                if let Ok(t) = apply_itr_transform(bitness, &mut inst.clone()) {
-                    // Clobbers CFLAGS
-                    return Ok(t);
-                }
-                // second target, memory obfuscation
-                if let Ok(t) = apply_om_transform(bitness, &mut inst.clone()) {
-                    return Ok(t);
-                }
-                // Now swap registers
-                if let Ok(t) = apply_rs_transform(bitness, &mut inst.clone()) {
-                    return Ok(t);
+        if inst.is_invalid() {
+            return Err(DeoptimizerError::InvalidInstruction);
+        }
+
+        if inst.op_count() == 0 {
+            return Err(DeoptimizerError::AllTransformsFailed);
+        }
+
+        // First handle special cases...
+        match apply_ce_transform(bitness, &mut inst.clone()) {
+            Ok(t) => return Ok(t),
+            Err(e) => {
+                if is_ce_compatible(inst) {
+                    error!("CE transform failed for: {}", inst);
+                    error!("{}", e);
                 }
             }
         }
+        if rand::thread_rng().gen_range(0.0..1.0) < freq {
+            // Priority is important, start with immidate obfuscation
+            match apply_ap_transform(bitness, &mut inst.clone()) {
+                Ok(t) => return Ok(t),
+                Err(e) => trace!("[AP] TransformError: {}", e),
+            }
+            match apply_li_transform(bitness, &mut inst.clone()) {
+                Ok(t) => return Ok(t),
+                Err(e) => trace!("[LI] TransformError: {}", e),
+            }
+            match apply_itr_transform(bitness, &mut inst.clone()) {
+                Ok(t) => return Ok(t),
+                Err(e) => trace!("[ITR] TransformError: {}", e),
+            }
+            // second target, memory obfuscation
+            match apply_om_transform(bitness, &mut inst.clone()) {
+                Ok(t) => return Ok(t),
+                Err(e) => error!("[OM] TransformError: {}", e),
+            }
+            // Now swap registers
+            match apply_rs_transform(bitness, &mut inst.clone()) {
+                Ok(t) => return Ok(t),
+                Err(e) => trace!("[RS] TransformError: {}", e),
+            }
+        }
+
         Err(DeoptimizerError::AllTransformsFailed)
     }
 
     pub fn deoptimize(&self, acode: &AnalyzedCode) -> Result<Vec<u8>, DeoptimizerError> {
-        let mut step1 = Vec::new(); // deoptimized code
+        let mut step1: Vec<Instruction> = Vec::new(); // deoptimized code
         let mut bt_fix_table: HashMap<u64, usize> = HashMap::new();
         let mut final_fix_table: HashMap<usize, usize> = HashMap::new();
         let mut new_ip: u64 = acode.start_addr;
         for mut inst in acode.code.clone() {
             if acode.is_branch_target(inst.ip()) {
-                // warn!("BT 0x{:X} -> 0x{:X}", inst.ip(), new_ip);
                 bt_fix_table.insert(inst.ip(), step1.len());
             }
             inst.set_ip(new_ip);
@@ -323,7 +351,7 @@ impl Deoptimizer {
 
         let mut fin_address = step1.last().unwrap().ip();
         loop {
-            warn!("============ adjusting branch targets ===========");
+            warn!("[============ ADJUSTING BRANCH TARGETS ===========]");
             for i in 0..step1.len() {
                 if final_fix_table.contains_key(&i) {
                     if let Some(idx) = final_fix_table.get(&i) {
@@ -350,6 +378,7 @@ impl Deoptimizer {
                 fin_address = step1.last().unwrap().ip();
             }
         }
+        adjust_instruction_addr(&mut step1, acode.start_addr);
 
         let mut encoder = Encoder::new(acode.bitness);
         let mut buffer = Vec::new();
