@@ -114,17 +114,23 @@ pub fn to_db_mnemonic(bytes: &[u8]) -> String {
 }
 
 pub fn get_register_save_seq(
+    bitness: u32,
     reg: Register,
 ) -> Result<(Instruction, Instruction), DeoptimizerError> {
-    let (c1, c2) = match reg.size() {
-        2 => (Code::Push_r16, Code::Pop_r16),
-        4 => (Code::Push_r32, Code::Pop_r32),
-        8 => (Code::Push_r64, Code::Pop_r64),
-        _ => return Err(DeoptimizerError::UnexpectedRegisterSize),
+    let mut full_reg = reg.full_register();
+    if bitness != 64 {
+        full_reg = reg.full_register32();
+    }
+    let (c1, c2) = match bitness {
+        16 => (Code::Push_r16, Code::Pop_r16),
+        32 => (Code::Push_r32, Code::Pop_r32),
+        64 => (Code::Push_r64, Code::Pop_r64),
+        _ => return Err(DeoptimizerError::InvalidProcessorMode),
     };
-    let pre = Instruction::with1(c1, reg)?;
-    let post = Instruction::with1(c2, reg)?;
-    Ok((pre, post))
+    Ok((
+        Instruction::with1(c1, full_reg)?,
+        Instruction::with1(c2, full_reg)?,
+    ))
 }
 
 pub fn get_random_register_value(reg: Register) -> u64 {
@@ -232,7 +238,7 @@ pub fn get_random_gp_register(
     let mut gpr64 = Vec::new();
 
     for r in Register::values() {
-        if r.is_segment_register() {
+        if r.is_segment_register() || r.full_register() == Register::RSP {
             continue;
         }
         if r.is_gpr8() {
@@ -243,12 +249,12 @@ pub fn get_random_gp_register(
             gpr16.push(r);
             continue;
         }
-        if r.is_gpr32() && r != Register::ESP {
+        if r.is_gpr32() {
             // We don't want stack pointers
             gpr32.push(r);
             continue;
         }
-        if r.is_gpr64() && r != Register::RSP {
+        if r.is_gpr64() {
             gpr64.push(r);
             continue;
         }
@@ -295,6 +301,21 @@ pub fn get_random_gp_register(
 }
 
 pub fn get_op_size(op: u32, inst: &Instruction) -> Result<usize, DeoptimizerError> {
+    // let op_size = match inst.op_kind(op) {
+    //     OpKind::Memory => inst.memory_size().element_size(),
+    //     OpKind::Register => inst.op0_register().size(),
+    //     OpKind::Immediate8 => 1,
+    //     OpKind::Immediate8to16 => 2,
+    //     OpKind::Immediate8to32 => 4,
+    //     OpKind::Immediate8to64 => 8,
+    //     OpKind::Immediate8_2nd => 1,
+    //     OpKind::Immediate16 => 2,
+    //     OpKind::Immediate32 => 4,
+    //     OpKind::Immediate32to64 => 8,
+    //     OpKind::Immediate64 => 8,
+    //     _ => return Err(DeoptimizerError::UnexpectedOperandType),
+    // };
+
     let op_size = match inst.op_kind(op) {
         OpKind::Memory => inst.memory_size().element_size(),
         OpKind::Register => inst.op0_register().size(),
@@ -322,7 +343,9 @@ pub fn get_code_with_str(code_str: &str) -> Code {
 }
 
 pub fn get_code_with_template(mnemonic: Mnemonic, inst: &Instruction) -> Code {
-    let new_code = format!("{:?}", inst.code())
-        .replace(&inst.op_code().to_string(), &format!("{:?}", mnemonic));
+    let new_code = format!("{:?}", inst.code()).replace(
+        &format!("{:?}", inst.mnemonic()),
+        &format!("{:?}", mnemonic),
+    );
     get_code_with_str(new_code.as_str())
 }

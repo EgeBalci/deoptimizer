@@ -21,24 +21,31 @@ pub fn apply_ap_transform(
         fix_inst = Instruction::with1(get_code_with_str("Not_rm64"), inst.op0_register())?;
     } else {
         set_op_immediate(inst, 1, rand_imm_val)?;
+        let op0_size = get_op_size(0, inst)? * 8;
+        let op1_size = get_op_size(1, inst)? * 8;
+        println!("code: {:?}", inst.code());
+        println!(
+            "op1_kind: {:?} {op1_size}",
+            inst.code().op_code().op1_kind()
+        );
         if imm > rand_imm_val {
             match inst.mnemonic() {
-                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => {
-                    fix_inst.set_code(get_code_with_template(Mnemonic::Add, inst))
-                }
-                Mnemonic::Sub | Mnemonic::Sbb => {
-                    fix_inst.set_code(get_code_with_template(Mnemonic::Sub, inst))
-                }
+                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => fix_inst.set_code(
+                    get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
+                ),
+                Mnemonic::Sub | Mnemonic::Sbb => fix_inst.set_code(get_code_with_str(&format!(
+                    "Add_rm{op0_size}_imm{op1_size}"
+                ))),
                 _ => return Err(DeoptimizerError::TransformNotPossible),
             }
         } else {
             match inst.mnemonic() {
-                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => {
-                    fix_inst.set_code(get_code_with_template(Mnemonic::Sub, inst))
-                }
-                Mnemonic::Sub | Mnemonic::Sbb => {
-                    fix_inst.set_code(get_code_with_template(Mnemonic::Add, inst))
-                }
+                Mnemonic::Add | Mnemonic::Adc | Mnemonic::Mov => fix_inst.set_code(
+                    get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
+                ),
+                Mnemonic::Sub | Mnemonic::Sbb => fix_inst.set_code(get_code_with_str(&format!(
+                    "Add_rm{op0_size}_imm{op1_size}"
+                ))),
                 _ => return Err(DeoptimizerError::TransformNotPossible),
             }
         }

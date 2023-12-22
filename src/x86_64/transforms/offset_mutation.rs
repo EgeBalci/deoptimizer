@@ -32,7 +32,7 @@ pub fn apply_om_transform(
             (bitness / 8) as usize,
             Some(info.used_registers()),
         )?;
-        let (reg_save_pre, reg_save_suf) = get_register_save_seq(rand_reg)?;
+        let (reg_save_pre, reg_save_suf) = get_register_save_seq(bitness, rand_reg)?;
         inst.set_memory_base(rand_reg);
         inst.set_memory_displacement64(0);
         inst.set_memory_displ_size(0);
@@ -64,15 +64,19 @@ pub fn apply_om_transform(
         Ok(rencode(bitness, result, rip)?)
     } else {
         let rnd_reg_val = get_random_register_value(base_reg);
-        let op_size = base_reg.size() * 8;
+        let op0_size = base_reg.size() * 8;
+        let mut op1_size = op0_size;
+        if op0_size == 64 {
+            op1_size = 32;
+        }
         let (c1, c2) = match (mem_disp as i32) < 0 {
             true => (
-                get_code_with_str(&format!("Add_rm{}_imm{}", op_size, op_size)),
-                get_code_with_str(&format!("Sub_rm{}_imm{}", op_size, op_size)),
+                get_code_with_str(&format!("Add_rm{op0_size}_imm{op1_size}")),
+                get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
             ),
             false => (
-                get_code_with_str(&format!("Sub_rm{}_imm{}", op_size, op_size)),
-                get_code_with_str(&format!("Add_rm{}_imm{}", op_size, op_size)),
+                get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
+                get_code_with_str(&format!("Add_rm{op0_size}_imm{op1_size}")),
             ),
         };
         let mut pre_inst = Instruction::with2(c1, base_reg, 0)?;

@@ -2,6 +2,8 @@
 mod tests {
     use crate::x86_64::*;
     use iced_x86::*;
+    use std::fs::File;
+    use std::io::Write;
 
     #[test]
     fn test_ap_transform() {
@@ -326,10 +328,21 @@ mod tests {
 
     #[test]
     fn test_get_random_gp_register() {
-        match get_random_gp_register(false, 4, None) {
-            Ok(reg) => assert_eq!(reg.size(), 4),
-            Err(e) => println!("[-] {e}"),
-        };
+        for _i in 0..300 {
+            assert_ne!(
+                get_random_gp_register(false, 4, None).expect("random register selection failed"),
+                Register::ESP
+            );
+            assert_ne!(
+                get_random_gp_register(false, 2, None).expect("random register selection failed"),
+                Register::DS
+            );
+
+            assert_ne!(
+                get_random_gp_register(true, 8, None).expect("random register selection failed"),
+                Register::RSP
+            );
+        }
     }
 
     #[test]
