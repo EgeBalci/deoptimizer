@@ -1,6 +1,7 @@
 use base64::prelude::*;
 use colored::Colorize;
 use log::{error, info, warn, LevelFilter};
+use std::error;
 use std::fs::File;
 use std::io::Write;
 
@@ -42,7 +43,7 @@ fn main() {
             return;
         }
     };
-    let mut out_file = match File::create(opts.outfile) {
+    let mut out_file = match File::create(opts.outfile.clone()) {
         Ok(f) => f,
         Err(e) => {
             error!("{}", e);
@@ -85,27 +86,96 @@ fn main() {
             return;
         }
     };
-    match out_file.write_all(&bytes) {
-        Ok(()) => (),
-        Err(e) => {
-            error!("{}", e);
-            return;
+    if opts.source.is_empty() {
+        match out_file.write_all(&bytes) {
+            Ok(()) => (),
+            Err(e) => {
+                error!("{}", e);
+                return;
+            }
         }
+        info!("De-optimized binary written into {}", opts.outfile);
+    } else {
+        let source = match deopt.disassemble(opts.bitness, start_addr, bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("{}", e);
+                return;
+            }
+        };
+        match out_file.write_all(source.as_bytes()) {
+            Ok(()) => (),
+            Err(e) => {
+                error!("{}", e);
+                return;
+            }
+        }
+        info!("De-optimized assembly source written into {}", opts.outfile);
     }
-    info!("All done!");
+
+    println!("{} All done!", "[✔]".green().bold());
 }
 
 fn print_summary(opts: &options::Options) {
-    let longest_option = 100;
+    let mut wspace = 48;
+    if opts.file.len() > wspace {
+        wspace = opts.file.len() + (wspace / 4)
+    }
     println!(
         "\n[ {} {} {} ]",
-        "#".repeat(longest_option / 4).yellow().bold(),
+        "#".repeat(wspace / 2 + 2).yellow().bold(),
         "OPTIONS".green().bold(),
-        "#".repeat(longest_option / 4).yellow().bold()
+        "#".repeat(wspace / 2 + 2).yellow().bold()
     );
-    println!("[ {} {}\t\t\t]", "Architecture:".blue().bold(), opts.arch);
-    println!("[ Input File: {}\t\t\t]", opts.file);
-    println!("[ Output File: {}\t\t\t]", opts.outfile);
+    println!(
+        "| {} {}{}|",
+        "Architecture:".blue().bold(),
+        opts.arch,
+        " ".repeat(wspace - opts.arch.len())
+    ); // 17 chars
+    println!(
+        "| {} {}{}|",
+        "Input File:  ".blue().bold(),
+        opts.file,
+        " ".repeat(wspace - opts.file.len())
+    );
+    println!(
+        "| {} {}{}|",
+        "Output File: ".blue().bold(),
+        opts.outfile,
+        " ".repeat(wspace - opts.outfile.len())
+    );
+    println!(
+        "| {} {}{}|",
+        "Bitness:     ".blue().bold(),
+        opts.bitness,
+        " ".repeat(wspace - 2)
+    );
+    println!(
+        "| {} {}{}|",
+        "Start Addr:  ".blue().bold(),
+        opts.addr,
+        " ".repeat(wspace - opts.addr.len())
+    );
+    println!(
+        "| {} {}{}|",
+        "Frequency:   ".blue().bold(),
+        format!("%{}", opts.freq),
+        " ".repeat(wspace - 4)
+    );
+    println!(
+        "| {} {}{}|",
+        "Cycle Count: ".blue().bold(),
+        opts.cycle,
+        " ".repeat(wspace - 1)
+    );
+    println!(
+        "[ {} {}{}]",
+        "Transforms:  ".blue().bold(),
+        opts.transforms,
+        " ".repeat(wspace - opts.transforms.len())
+    );
+    print!("\n");
 }
 
 fn print_banner() {

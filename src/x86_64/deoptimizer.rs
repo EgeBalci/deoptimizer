@@ -268,13 +268,22 @@ impl Deoptimizer {
         result
     }
 
-    pub fn disassemble(&mut self, acode: &AnalyzedCode) -> Result<String, DeoptimizerError> {
+    pub fn disassemble(
+        &mut self,
+        bitness: u32,
+        start_addr: u64,
+        bytes: Vec<u8>,
+    ) -> Result<String, DeoptimizerError> {
         info!(
-            "Disassembling at -> 0x{:X} (mode={})",
-            acode.start_addr, acode.bitness
+            "Disassembling at -> 0x{:016X} (mode={})",
+            start_addr, bitness
         );
+        let acode = self.analyze(bytes.as_slice(), bitness, start_addr)?;
         let mut result = String::new();
-        for inst in acode.code.clone() {
+        let mut decoder = Decoder::new(acode.bitness, bytes.as_slice(), DecoderOptions::NONE);
+        let mut inst = Instruction::default();
+        while decoder.can_decode() {
+            decoder.decode_out(&mut inst);
             if inst.is_invalid() {
                 warn!(
                     "Inlining invalid instruction bytes at: 0x{:016X}",

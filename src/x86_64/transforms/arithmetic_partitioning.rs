@@ -22,10 +22,6 @@ pub fn apply_ap_transform(
     if inst.mnemonic() == Mnemonic::Push {
         let sp_reg = get_stack_pointer_register(bitness)?;
         let op0_size = get_op_size(0, inst)? * 8;
-        println!(
-            "code: {:?}",
-            get_code_with_str(&format!("Add_rm{bitness}_imm{op0_size}"))
-        );
         fix_inst = Instruction::with2(
             get_code_with_str(&format!("Add_rm{bitness}_imm{op0_size}")),
             MemoryOperand::with_base(sp_reg),
