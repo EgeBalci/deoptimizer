@@ -1,4 +1,3 @@
-use crate::x86_64::apply_ap_transform;
 use crate::x86_64::helpers::*;
 use crate::x86_64::DeoptimizerError;
 use iced_x86::*;
@@ -12,85 +11,86 @@ pub fn apply_om_transform(
 ) -> Result<Vec<Instruction>, DeoptimizerError> {
     // First check the operand types.
     let base_reg = inst.memory_base();
-    if !inst
-        .op_kinds()
-        .collect::<Vec<OpKind>>()
-        .contains(&OpKind::Memory)
-        || base_reg.is_segment_register()
-        || base_reg.is_vector_register()
-        || inst.is_stack_instruction()
-    {
+    if !is_om_compatible(inst) {
         return Err(DeoptimizerError::TransformNotPossible);
     }
     let rip = inst.ip();
     let mem_disp = inst.memory_displacement64();
-    if base_reg == Register::None {
-        let mut ifac = InstructionInfoFactory::new();
-        let info = ifac.info(inst);
-        let rand_reg = get_random_gp_register(
-            bitness == 64,
-            (bitness / 8) as usize,
-            Some(info.used_registers()),
-        )?;
-        let (reg_save_pre, reg_save_suf) = get_register_save_seq(bitness, rand_reg)?;
-        inst.set_memory_base(rand_reg);
-        inst.set_memory_displacement64(0);
-        inst.set_memory_displ_size(0);
-        inst.set_memory_index(Register::None);
-        inst.set_segment_prefix(Register::None);
-        // This case is spesific to mov instruction
-        let opc0 = inst.code().op_code().op0_kind();
-        let opc1 = inst.code().op_code().op1_kind();
-        let op0_size = get_op_size(0, inst)? * 8;
-        let op1_size = get_op_size(1, inst)? * 8;
-        if opc0 == OpCodeOperandKind::mem_offs {
-            inst.set_code(get_code_with_str(&format!("Mov_rm{op0_size}_r{op1_size}")));
-        }
-        if opc1 == OpCodeOperandKind::mem_offs {
-            inst.set_code(get_code_with_str(&format!("Mov_r{op0_size}_rm{op1_size}")));
-        }
-
-        let mut mov = match bitness {
-            16 => Instruction::with2(Code::Mov_rm16_imm16, rand_reg, mem_disp)?,
-            32 => Instruction::with2(Code::Mov_rm32_imm32, rand_reg, mem_disp)?,
-            64 => Instruction::with2(Code::Mov_r64_imm64, rand_reg, mem_disp)?,
-            _ => return Err(DeoptimizerError::UnexpectedRegisterSize),
-        };
-        let movs = apply_ap_transform(bitness, &mut mov)?;
-        let mut result = [reg_save_pre].to_vec();
-        result = [result, movs].concat();
-        result.push(*inst);
-        result.push(reg_save_suf);
-        Ok(rencode(bitness, result, rip)?)
-    } else {
-        let rnd_reg_val = get_random_register_value(base_reg);
-        let op0_size = base_reg.size() * 8;
-        let mut op1_size = op0_size;
-        if op0_size == 64 {
-            op1_size = 32;
-        }
-        let (c1, c2) = match (mem_disp as i32) < 0 {
-            true => (
-                get_code_with_str(&format!("Add_rm{op0_size}_imm{op1_size}")),
-                get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
-            ),
-            false => (
-                get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
-                get_code_with_str(&format!("Add_rm{op0_size}_imm{op1_size}")),
-            ),
-        };
-        let mut pre_inst = Instruction::with2(c1, base_reg, 0)?;
-        set_op_immediate(&mut pre_inst, 1, rnd_reg_val)?;
-        let mut post_inst = Instruction::with2(c2, base_reg, 0)?;
-        set_op_immediate(&mut post_inst, 1, rnd_reg_val)?;
-        let new_disply = mem_disp.abs_diff(rnd_reg_val); // This is not right!!!
-        inst.set_memory_displ_size(base_reg.size() as u32);
-        inst.set_memory_displacement64(new_disply as u64);
-
-        Ok(rencode(
-            bitness,
-            [pre_inst, inst.clone(), post_inst].to_vec(),
-            rip,
-        )?)
+    let rand_val = get_random_register_value(base_reg);
+    let op0_size = base_reg.size() * 8;
+    let mut op1_size = op0_size;
+    if op1_size == 64 {
+        op1_size = 32;
     }
+    let new_mem_disp_sign = rand_val as i32 > 0; // The sign of the memory displacement
+    let old_mem_disp_sign = mem_disp as i32 > 0; // The sign of the memory displacement
+    let abs_old_mem_disp = match old_mem_disp_sign {
+        true => mem_disp,
+        false => (mem_disp as i32).abs() as u64,
+    };
+    let (c1, c2) = match new_mem_disp_sign {
+        true => (
+            get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
+            get_code_with_str(&format!("Add_rm{op0_size}_imm{op1_size}")),
+        ),
+        false => (
+            get_code_with_str(&format!("Add_rm{op0_size}_imm{op1_size}")),
+            get_code_with_str(&format!("Sub_rm{op0_size}_imm{op1_size}")),
+        ),
+    };
+
+    let fix_val = match (new_mem_disp_sign, old_mem_disp_sign) {
+        (true, true) => mem_disp.abs_diff(rand_val),
+        (false, false) => match base_reg.size() {
+            1 => ((rand_val as i8).abs() as u64).abs_diff(abs_old_mem_disp),
+            2 => ((rand_val as i16).abs() as u64).abs_diff(abs_old_mem_disp),
+            _ => ((rand_val as i32).abs() as u64).abs_diff(abs_old_mem_disp),
+        },
+        (true, false) | (false, true) => match base_reg.size() {
+            1 => ((rand_val as i8).abs() as u64) + abs_old_mem_disp,
+            2 => ((rand_val as i16).abs() as u64) + abs_old_mem_disp,
+            _ => ((rand_val as i32).abs() as u64) + abs_old_mem_disp,
+        },
+    };
+
+    let mut pre_inst = Instruction::with2(c1, base_reg, 0)?;
+    set_op_immediate(&mut pre_inst, 1, fix_val)?;
+    let mut post_inst = Instruction::with2(c2, base_reg, 0)?;
+    set_op_immediate(&mut post_inst, 1, fix_val)?;
+
+    inst.set_memory_displ_size(bitness / 8);
+    inst.set_memory_displacement64(rand_val);
+    let mut result = [pre_inst, inst.clone()].to_vec();
+    if base_reg.full_register() != inst.op0_register().full_register() {
+        result.push(post_inst);
+    }
+
+    Ok(rencode(bitness, result, rip)?)
+}
+
+pub fn is_om_compatible(inst: &Instruction) -> bool {
+    let base_reg = inst.memory_base();
+    let mut info_factory = InstructionInfoFactory::new();
+    let info = info_factory.info(&inst);
+    if !matches!(
+        inst.mnemonic(),
+        Mnemonic::Mov | Mnemonic::Movzx | Mnemonic::Movd | Mnemonic::Movq | Mnemonic::Lea
+    ) && info.used_registers().iter().any(|r| {
+        // This needs more mnemonics
+        r.register().full_register() == base_reg.full_register()
+            && matches!(r.access(), OpAccess::Write | OpAccess::ReadWrite)
+    }) {
+        return false;
+    }
+
+    !(matches!(inst.mnemonic(), Mnemonic::Test | Mnemonic::Cmp)
+        || inst.is_jcc_short_or_near()
+        || !inst
+            .op_kinds()
+            .collect::<Vec<OpKind>>()
+            .contains(&OpKind::Memory)
+        || base_reg.is_segment_register()
+        || base_reg.is_vector_register()
+        || inst.is_stack_instruction()
+        || base_reg == Register::None)
 }

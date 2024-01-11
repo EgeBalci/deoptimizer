@@ -8,28 +8,12 @@ pub fn apply_rs_transform(
     bitness: u32,
     inst: &mut Instruction,
 ) -> Result<Vec<Instruction>, DeoptimizerError> {
-    if !inst
-        .op_kinds()
-        .collect::<Vec<OpKind>>()
-        .contains(&OpKind::Register)
-        || inst.is_stack_instruction()
-    {
+    if !is_rs_compatible(inst) {
         return Err(DeoptimizerError::TransformNotPossible);
     }
 
     // We need to fix the code if it is spesific to any register
-    if is_using_fixed_register(inst) && is_immediate_operand(inst.op1_kind()) {
-        let code = format!("{:?}", inst.code());
-        for (i, op) in inst.op_kinds().enumerate() {
-            if op == OpKind::Register {
-                let reg = inst.op_register(i as u32);
-                let new_op_kind = &format!("rm{}", reg.size() * 8);
-                inst.set_code(get_code_with_str(
-                    &code.replace(&format!("{:?}", reg), new_op_kind),
-                ));
-            }
-        }
-    }
+    transpose_fixed_register_operand(inst)?;
     let rip = inst.ip();
     let mut info_factory = InstructionInfoFactory::new();
     let info = info_factory.info(&inst);
@@ -57,4 +41,22 @@ pub fn apply_rs_transform(
     let xchg = Instruction::with2(xchg_code, swap_reg, rand_reg)?;
 
     Ok(rencode(bitness, [xchg, inst.clone(), xchg].to_vec(), rip)?)
+}
+
+pub fn is_rs_compatible(inst: &Instruction) -> bool {
+    !(!inst
+        .op_kinds()
+        .collect::<Vec<OpKind>>()
+        .contains(&OpKind::Register)
+        || inst
+            .op_kinds()
+            .collect::<Vec<OpKind>>()
+            .contains(&OpKind::Memory)
+        || inst.op_count() < 2
+        || inst.is_jcc_short_or_near()
+        || inst.is_loop()
+        || inst.is_loopcc()
+        || inst.mnemonic() == Mnemonic::Call
+        || inst.is_string_instruction()
+        || inst.is_stack_instruction())
 }

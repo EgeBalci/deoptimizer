@@ -1,4 +1,5 @@
 use crate::x86_64::*;
+use bitflags::bitflags;
 use iced_x86::code_asm::*;
 use iced_x86::*;
 use log::{debug, error, info, trace, warn};
@@ -40,6 +41,10 @@ pub enum DeoptimizerError {
     RegisterNotFound,
     #[error("Invalid instruction template.")]
     InvalidTemplate,
+    #[error("Instruction transpose attempt failed.")]
+    TransposeFailed,
+    #[error("Invalid transform gadget.")]
+    InvalidTransformGadget,
     #[error("Instruction encoding failed: {0}")]
     EncodingFail(#[from] IcedError),
 }
@@ -50,6 +55,24 @@ enum AssemblySyntax {
     Masm,
     Intel,
     Gas,
+}
+bitflags! {
+    #[derive(Clone, Copy, Debug,PartialEq,Eq, Hash)]
+    pub struct AvailableTransforms: u8 {
+        const None = 0;
+        const ArithmeticPartitioning = 1;
+        const LogicalInverse = 1 << 1;
+        const LogicalPartitioning = 1 << 2;
+        const OffsetMutation = 1 << 3;
+        const RegisterSwap = 1 << 4;
+        const All = u8::MAX;
+    }
+}
+
+impl AvailableTransforms {
+    fn is_set(self, flag: Self) -> bool {
+        self & flag == flag
+    }
 }
 
 pub struct AnalyzedCode {
@@ -106,6 +129,8 @@ pub struct Deoptimizer {
     pub cycle: u32,
     /// Deoptimization frequency.
     pub freq: f32,
+    /// Allowed transform routines.
+    pub transforms: AvailableTransforms,
     /// Allow processing of invalid instructions.
     pub allow_invalid: bool,
     /// Disassembler syntax.
@@ -118,8 +143,26 @@ impl Deoptimizer {
             cycle: 1,
             freq: 0.5,
             allow_invalid: false,
+            transforms: AvailableTransforms::All,
             syntax: AssemblySyntax::Nasm,
         }
+    }
+
+    pub fn set_transform_gadgets(&mut self, transforms: String) -> Result<(), DeoptimizerError> {
+        let mut selected_transforms = AvailableTransforms::None;
+        let trs = transforms.split(",");
+        for (_i, t) in trs.enumerate() {
+            match t.to_uppercase().as_str() {
+                "AP" => selected_transforms |= AvailableTransforms::ArithmeticPartitioning,
+                "LI" => selected_transforms |= AvailableTransforms::LogicalInverse,
+                "LP" => selected_transforms |= AvailableTransforms::LogicalPartitioning,
+                "OM" => selected_transforms |= AvailableTransforms::OffsetMutation,
+                "RS" => selected_transforms |= AvailableTransforms::RegisterSwap,
+                _ => return Err(DeoptimizerError::InvalidTransformGadget),
+            }
+        }
+        self.transforms = selected_transforms;
+        Ok(())
     }
 
     pub fn set_syntax(&mut self, syntax: String) -> Result<(), DeoptimizerError> {
@@ -266,16 +309,18 @@ impl Deoptimizer {
         bitness: u32,
         inst: &Instruction,
         freq: f32,
+        transforms: AvailableTransforms,
     ) -> Result<Vec<Instruction>, DeoptimizerError> {
         if inst.is_invalid() {
+            // We can skip invalid instructions (including hardcoded data
             return Err(DeoptimizerError::InvalidInstruction);
         }
-
+        // We can bailout if there is no operand
         if inst.op_count() == 0 {
             return Err(DeoptimizerError::AllTransformsFailed);
         }
 
-        // First handle special cases...
+        // First we must handle special cases...
         match apply_ce_transform(bitness, &mut inst.clone()) {
             Ok(t) => return Ok(t),
             Err(e) => {
@@ -285,29 +330,43 @@ impl Deoptimizer {
                 }
             }
         }
+
         if rand::thread_rng().gen_range(0.0..1.0) < freq {
             // Priority is important, start with immidate obfuscation
-            match apply_ap_transform(bitness, &mut inst.clone()) {
-                Ok(t) => return Ok(t),
-                Err(e) => trace!("[AP] TransformError: {}", e),
+            if transforms.is_set(AvailableTransforms::ArithmeticPartitioning) {
+                match apply_ap_transform(bitness, &mut inst.clone()) {
+                    Ok(t) => return Ok(t),
+                    Err(e) => trace!("[AP] TransformError: {}", e),
+                }
             }
-            match apply_li_transform(bitness, &mut inst.clone()) {
-                Ok(t) => return Ok(t),
-                Err(e) => trace!("[LI] TransformError: {}", e),
+            if transforms.is_set(AvailableTransforms::LogicalInverse) {
+                match apply_li_transform(bitness, &mut inst.clone()) {
+                    Ok(t) => return Ok(t),
+                    Err(e) => trace!("[LI] TransformError: {}", e),
+                }
             }
-            match apply_itr_transform(bitness, &mut inst.clone()) {
-                Ok(t) => return Ok(t),
-                Err(e) => trace!("[ITR] TransformError: {}", e),
+
+            if transforms.is_set(AvailableTransforms::LogicalPartitioning) {
+                match apply_lp_transform(bitness, &mut inst.clone()) {
+                    Ok(t) => return Ok(t),
+                    Err(e) => trace!("[LP] TransformError: {}", e),
+                }
             }
-            // second target, memory obfuscation
-            match apply_om_transform(bitness, &mut inst.clone()) {
-                Ok(t) => return Ok(t),
-                Err(e) => error!("[OM] TransformError: {}", e),
+
+            if transforms.is_set(AvailableTransforms::OffsetMutation) {
+                // second target, memory obfuscation
+                match apply_om_transform(bitness, &mut inst.clone()) {
+                    Ok(t) => return Ok(t),
+                    Err(e) => trace!("[OM] TransformError: {}", e),
+                }
             }
-            // Now swap registers
-            match apply_rs_transform(bitness, &mut inst.clone()) {
-                Ok(t) => return Ok(t),
-                Err(e) => trace!("[RS] TransformError: {}", e),
+
+            if transforms.is_set(AvailableTransforms::RegisterSwap) {
+                // Now swap registers
+                match apply_rs_transform(bitness, &mut inst.clone()) {
+                    Ok(t) => return Ok(t),
+                    Err(e) => trace!("[RS] TransformError: {}", e),
+                }
             }
         }
 
@@ -324,7 +383,12 @@ impl Deoptimizer {
                 bt_fix_table.insert(inst.ip(), step1.len());
             }
             inst.set_ip(new_ip);
-            match Deoptimizer::apply_transform(acode.bitness, &inst, self.freq) {
+            match Deoptimizer::apply_transform(
+                acode.bitness,
+                &inst,
+                self.freq,
+                self.transforms.clone(),
+            ) {
                 Ok(dinst) => {
                     new_ip = dinst.last().unwrap().next_ip();
                     step1 = [step1, dinst.clone()].concat();
@@ -351,7 +415,7 @@ impl Deoptimizer {
 
         let mut fin_address = step1.last().unwrap().ip();
         loop {
-            warn!("[============ ADJUSTING BRANCH TARGETS ===========]");
+            debug!("[============ ADJUSTING BRANCH TARGETS ===========]");
             for i in 0..step1.len() {
                 if final_fix_table.contains_key(&i) {
                     if let Some(idx) = final_fix_table.get(&i) {

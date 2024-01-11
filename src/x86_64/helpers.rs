@@ -1,6 +1,5 @@
 use crate::x86_64::DeoptimizerError;
 use iced_x86::*;
-use log::{debug, error, info, warn};
 use rand::thread_rng;
 use rand::{seq::SliceRandom, Rng};
 
@@ -30,18 +29,8 @@ pub fn rencode(
     insts: Vec<Instruction>,
     rip: u64,
 ) -> Result<Vec<Instruction>, IcedError> {
-    let mut buffer = Vec::new();
     let mut result = Vec::new();
-    for inst in insts.clone() {
-        let mut encoder = Encoder::new(bitness);
-        match encoder.encode(&inst, inst.ip()) {
-            Ok(_) => buffer = [buffer, encoder.take_buffer()].concat(),
-            Err(e) => {
-                debug!("Encoding Error: {}", inst);
-                return Err(e);
-            }
-        };
-    }
+    let buffer = get_instruction_bytes(bitness, insts)?;
     let mut decoder = Decoder::new(bitness, &buffer, DecoderOptions::NONE);
     decoder.set_ip(rip);
     let mut inst = Instruction::default();
@@ -49,33 +38,74 @@ pub fn rencode(
         decoder.decode_out(&mut inst);
         result.push(inst);
     }
-
     Ok(result)
 }
 
+pub fn get_instruction_bytes(bitness: u32, insts: Vec<Instruction>) -> Result<Vec<u8>, IcedError> {
+    let mut buffer = Vec::new();
+    for inst in insts.clone() {
+        let mut encoder = Encoder::new(bitness);
+        match encoder.encode(&inst, inst.ip()) {
+            Ok(_) => buffer = [buffer, encoder.take_buffer()].concat(),
+            Err(e) => return Err(e),
+        };
+    }
+    Ok(buffer)
+}
+
 pub fn is_using_fixed_register(inst: &Instruction) -> bool {
-    let code_str = format!("{:?}", inst.code());
+    let operands = format!("{:?}", inst.code())
+        .trim_start_matches(&format!("{:?}", inst.mnemonic()))
+        .to_string();
     for reg in Register::values() {
-        if code_str.contains(&format!("{:?}", reg).to_string()) {
+        if operands.contains(&format!("{:?}", reg).to_string()) {
             return true;
         }
     }
     false
 }
 
-pub fn get_aprx_immediate_size(imm: u64) -> OpKind {
-    if imm <= u8::MAX as u64 {
-        return OpKind::Immediate8;
-    } else if imm > u8::MAX as u64 && imm <= u16::MAX as u64 {
-        return OpKind::Immediate16;
-    } else if imm > u16::MAX as u64 && imm <= u32::MAX as u64 {
-        return OpKind::Immediate32;
-    } else if imm > u32::MAX as u64 && imm <= u64::MAX {
-        return OpKind::Immediate64;
-    } else {
-        return OpKind::Immediate8to64;
+pub fn transpose_fixed_register_operand(inst: &mut Instruction) -> Result<(), DeoptimizerError> {
+    if !is_using_fixed_register(inst) {
+        return Ok(());
     }
+    for (i, op) in inst.op_kinds().enumerate() {
+        let code = format!("{:?}", inst.code());
+        if op == OpKind::Register {
+            let reg = inst.op_register(i as u32);
+            let mut new_code = get_code_with_str(
+                &code.replace(&format!("{:?}", reg), &format!("rm{}", reg.size() * 8)),
+            );
+            if new_code == Code::INVALID {
+                // One more try...
+                new_code = get_code_with_str(
+                    &code.replace(&format!("{:?}", reg), &format!("r{}", reg.size() * 8)),
+                );
+            }
+            if new_code != Code::INVALID {
+                inst.set_code(new_code);
+                if !is_using_fixed_register(inst) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err(DeoptimizerError::TransposeFailed)
 }
+
+// pub fn get_aprx_immediate_size(imm: u64) -> OpKind {
+//     if imm <= u8::MAX as u64 {
+//         return OpKind::Immediate8;
+//     } else if imm > u8::MAX as u64 && imm <= u16::MAX as u64 {
+//         return OpKind::Immediate16;
+//     } else if imm > u16::MAX as u64 && imm <= u32::MAX as u64 {
+//         return OpKind::Immediate32;
+//     } else if imm > u32::MAX as u64 && imm <= u64::MAX {
+//         return OpKind::Immediate64;
+//     } else {
+//         return OpKind::Immediate8to64;
+//     }
+// }
 
 pub fn get_immediate_indexes(inst: &Instruction) -> Option<Vec<u32>> {
     let mut indexes = Vec::new();
@@ -88,6 +118,15 @@ pub fn get_immediate_indexes(inst: &Instruction) -> Option<Vec<u32>> {
         return None;
     }
     Some(indexes)
+}
+
+pub fn get_stack_pointer_register(bitness: u32) -> Result<Register, DeoptimizerError> {
+    Ok(match bitness {
+        16 => Register::SP,
+        32 => Register::ESP,
+        64 => Register::RSP,
+        _ => return Err(DeoptimizerError::InvalidProcessorMode),
+    })
 }
 
 pub fn is_immediate_operand(op: OpKind) -> bool {
@@ -135,11 +174,11 @@ pub fn get_register_save_seq(
 
 pub fn get_random_register_value(reg: Register) -> u64 {
     let mut rng = rand::thread_rng();
-    if reg.size() > 4 {
+    if reg.size() >= 4 {
         // because its hard to handle 64 bit values
-        return rng.gen_range(1..i32::MAX) as u64;
+        return rng.gen_range(i32::MIN..i32::MAX) as u64;
     }
-    rng.gen_range(1..u64::pow(2, (reg.size() * 8) as u32)) as u64
+    rng.gen_range(1..u64::pow(1, (reg.size() * 8) as u32)) as u64
 }
 
 pub fn set_op_immediate(
@@ -283,7 +322,9 @@ pub fn get_random_gp_register(
     // Remove excluded registers
     if let Some(list) = exclude_list {
         for ex in list {
-            let index = shuffed_regs.iter().position(|x| *x == ex.register());
+            let index = shuffed_regs
+                .iter()
+                .position(|x| x.full_register() == ex.register().full_register());
             if index.is_some() {
                 shuffed_regs.remove(index.unwrap());
             }

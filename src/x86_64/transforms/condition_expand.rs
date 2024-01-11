@@ -25,16 +25,13 @@ pub fn apply_ce_transform(
 
     if inst.is_loopcc() || inst.is_loop() {
         match inst.mnemonic() {
-            Mnemonic::Loop => {
+            Mnemonic::Loop | Mnemonic::Loope => {
                 asm.jz(bt)?;
                 let insts = asm.instructions();
                 let mut jz = insts.first().unwrap().clone();
                 jz.set_ip(test.next_ip());
                 jz.as_near_branch();
                 return Ok(rencode(bitness, [test, jz].to_vec(), inst.ip())?);
-            }
-            Mnemonic::Loope => {
-                todo!("Implement loope transform case...");
             }
             Mnemonic::Loopne => {
                 asm.jnz(bt)?;
