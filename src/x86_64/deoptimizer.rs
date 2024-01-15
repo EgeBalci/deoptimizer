@@ -200,7 +200,7 @@ impl Deoptimizer {
             if inst.is_invalid() {
                 warn!("Found invalid instruction at: 0x{:016X}", inst.ip());
                 if !self.allow_invalid {
-                    return Err(DeoptimizerError::InvalidSyntax);
+                    return Err(DeoptimizerError::InvalidInstruction);
                 }
             }
             code.push(inst);
@@ -401,9 +401,13 @@ impl Deoptimizer {
                 Ok(dinst) => {
                     new_ip = dinst.last().unwrap().next_ip();
                     step1 = [step1, dinst.clone()].concat();
+                    print_inst_diff(&inst, dinst);
                     continue;
                 }
-                Err(e) => debug!("TransformError: {e} => [{}]", inst),
+                Err(e) => {
+                    trace!("TransformError: {e} => [{}]", inst);
+                    print_inst_diff(&inst, [inst].to_vec());
+                }
             }
             new_ip = inst.next_ip();
             step1.push(inst);
@@ -414,7 +418,7 @@ impl Deoptimizer {
             if bt != 0 {
                 if let Some(idx) = bt_fix_table.get(&bt) {
                     final_fix_table.insert(i, *idx);
-                    debug!("{:016X} {} >> {}", inst.ip(), inst, step1[*idx]);
+                    trace!("{:016X} {} >> {}", inst.ip(), inst, step1[*idx]);
                 } else {
                     error!("Could not find branch fix entry for: {}", inst);
                 }
@@ -424,11 +428,11 @@ impl Deoptimizer {
 
         let mut fin_address = step1.last().unwrap().ip();
         loop {
-            debug!("[============ ADJUSTING BRANCH TARGETS ===========]");
+            trace!("[============ ADJUSTING BRANCH TARGETS ===========]");
             for i in 0..step1.len() {
                 if final_fix_table.contains_key(&i) {
                     if let Some(idx) = final_fix_table.get(&i) {
-                        debug!(
+                        trace!(
                             "Adjusting BT: 0x{:X} -> 0x{:X} {}",
                             step1[i].ip(),
                             step1[*idx].ip(),

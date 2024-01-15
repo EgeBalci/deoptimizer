@@ -1,4 +1,5 @@
 use crate::x86_64::DeoptimizerError;
+use colored::Colorize;
 use iced_x86::*;
 use rand::thread_rng;
 use rand::{seq::SliceRandom, Rng};
@@ -51,6 +52,55 @@ pub fn get_instruction_bytes(bitness: u32, insts: Vec<Instruction>) -> Result<Ve
         };
     }
     Ok(buffer)
+}
+
+pub fn print_inst_diff(inst: &Instruction, dinst: Vec<Instruction>) {
+    if log::max_level() < log::Level::Info {
+        return;
+    }
+
+    let inst_column_len = 35;
+    let inst_str = format!("{}", inst);
+
+    if dinst.len() != 1 || format!("{}", dinst.first().unwrap()) != inst_str {
+        print!(
+            "{:016X}:\t{}{}>",
+            inst.ip(),
+            inst_str.red(),
+            " ".repeat(inst_column_len - inst_str.len())
+        );
+        for (i, di) in dinst.iter().enumerate() {
+            let di_str = format!("{}", di);
+            println!(
+                "\t{}{}",
+                di_str.green(),
+                " ".repeat(inst_column_len - di_str.len())
+            );
+            if i != dinst.len() - 1 {
+                print!(
+                    "{:016X}:\t{}{}>",
+                    inst.ip(),
+                    ".".repeat(inst_str.len()),
+                    " ".repeat(inst_column_len - inst_str.len())
+                )
+            }
+        }
+    } else {
+        println!(
+            "{:016X}:\t{}|\t{}",
+            inst.ip(),
+            format!(
+                "{}{}",
+                inst_str.blue(),
+                " ".repeat(inst_column_len - inst_str.len())
+            ),
+            format!(
+                "{}{}",
+                inst_str.blue(),
+                " ".repeat(inst_column_len - inst_str.len())
+            ),
+        );
+    }
 }
 
 pub fn is_using_fixed_register(inst: &Instruction) -> bool {
@@ -178,7 +228,7 @@ pub fn get_random_register_value(reg: Register) -> u64 {
         // because its hard to handle 64 bit values
         return rng.gen_range(i32::MIN..i32::MAX) as u64;
     }
-    rng.gen_range(1..u64::pow(1, (reg.size() * 8) as u32)) as u64
+    rng.gen_range(1..u64::pow(2, (reg.size() * 8) as u32)) as u64
 }
 
 pub fn set_op_immediate(

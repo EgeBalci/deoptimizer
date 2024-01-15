@@ -69,6 +69,10 @@ pub struct Options {
     /// verbose output mode.
     #[arg(long, short = 'v')]
     pub verbose: bool,
+
+    /// debug output mode.
+    #[arg(long)]
+    pub debug: bool,
 }
 pub fn parse_options() -> Result<Options, ArgParseError> {
     // let mut opts: Options = argh::from_env();
@@ -91,6 +95,9 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
 
     if opts.verbose {
         log::set_max_level(log::LevelFilter::Debug);
+    }
+    if opts.debug {
+        log::set_max_level(log::LevelFilter::Trace);
     }
     Ok(opts)
 }

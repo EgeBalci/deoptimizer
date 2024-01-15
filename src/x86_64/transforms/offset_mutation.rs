@@ -93,4 +93,4 @@ pub fn is_om_compatible(inst: &Instruction) -> bool {
         || base_reg.is_vector_register()
         || inst.is_stack_instruction()
         || base_reg == Register::None)
-}
+

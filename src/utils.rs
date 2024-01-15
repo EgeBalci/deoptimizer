@@ -16,7 +16,7 @@ pub struct Logger;
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() < Level::Trace
+        metadata.level() <= log::max_level()
     }
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {

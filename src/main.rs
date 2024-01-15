@@ -54,6 +54,7 @@ fn main() {
     info!("Input file size: {}", file.len());
     let mut deopt = x86_64::Deoptimizer::new();
     deopt.freq = opts.freq;
+    deopt.allow_invalid = opts.allow_invalid;
     if let Err(e) = deopt.set_transform_gadgets(opts.transforms) {
         error!("{}", e);
         return;
@@ -121,6 +122,7 @@ fn print_summary(opts: &options::Options) {
     if opts.file.len() > wspace {
         wspace = opts.file.len() + (wspace / 4)
     }
+    let freq_str = format!("%{:.4}", opts.freq * 100.0);
     println!(
         "\n[ {} {} {} ]",
         "#".repeat(wspace / 2 + 2).yellow().bold(),
@@ -160,8 +162,8 @@ fn print_summary(opts: &options::Options) {
     println!(
         "| {} {}{}|",
         "Frequency:   ".blue().bold(),
-        format!("%{}", opts.freq),
-        " ".repeat(wspace - 4)
+        freq_str,
+        " ".repeat(wspace - freq_str.len())
     );
     println!(
         "| {} {}{}|",
