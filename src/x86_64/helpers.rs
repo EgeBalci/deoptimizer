@@ -4,17 +4,20 @@ use iced_x86::*;
 use rand::thread_rng;
 use rand::{seq::SliceRandom, Rng};
 
-pub fn randomize_immediate_value(imm: u64) -> u64 {
+pub fn random_immediate_value(kind: OpKind) -> Result<u64, DeoptimizerError> {
     let mut rng = rand::thread_rng();
-    if imm < u8::MAX as u64 {
-        rng.gen_range(1..u8::MAX) as u64
-    } else if imm > u8::MAX as u64 && imm < u16::MAX as u64 {
-        rng.gen_range(u8::MAX as u16..u16::MAX) as u64
-    } else if imm > u16::MAX as u64 && imm < u32::MAX as u64 {
-        rng.gen_range(u16::MAX as u32..u32::MAX) as u64
-    } else {
-        rng.gen_range(u32::MAX as u64..u64::MAX) as u64
-    }
+    Ok(match kind {
+        OpKind::Immediate8 => rng.gen_range(1..u8::MAX) as u64,
+        OpKind::Immediate8to16
+        | OpKind::Immediate8to32
+        | OpKind::Immediate8to64
+        | OpKind::Immediate8_2nd => rng.gen_range(1..i8::MAX) as u64,
+        OpKind::Immediate16 => rng.gen_range(1..u16::MAX) as u64,
+        OpKind::Immediate32 => rng.gen_range(1..u32::MAX) as u64,
+        OpKind::Immediate32to64 => rng.gen_range(1..i32::MAX) as u64,
+        OpKind::Immediate64 => rng.gen_range(1..u32::MAX) as u64,
+        _ => return Err(DeoptimizerError::UnexpectedOperandType),
+    })
 }
 
 pub fn adjust_instruction_addr(code: &mut Vec<Instruction>, start_addr: u64) {
@@ -55,11 +58,11 @@ pub fn get_instruction_bytes(bitness: u32, insts: Vec<Instruction>) -> Result<Ve
 }
 
 pub fn print_inst_diff(inst: &Instruction, dinst: Vec<Instruction>) {
-    if log::max_level() < log::Level::Info {
+    if log::max_level() < log::Level::Info || dinst.len() == 0 {
         return;
     }
 
-    let inst_column_len = 35;
+    let inst_column_len = 40;
     let inst_str = format!("{}", inst);
 
     if dinst.len() != 1 || format!("{}", dinst.first().unwrap()) != inst_str {
