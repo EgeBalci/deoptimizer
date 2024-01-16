@@ -12,11 +12,11 @@ pub fn apply_ap_transform(
     }
     // We are looking for MOV/PUSH (=) ADD/ADC (+) SUB/SBB (-)
     let rip = inst.ip();
-    let imm = match inst.mnemonic() {
-        Mnemonic::Push => inst.immediate(0),
-        _ => inst.immediate(1),
+    let (imm, kind) = match inst.mnemonic() {
+        Mnemonic::Push => (inst.immediate(0), inst.op0_kind()),
+        _ => (inst.immediate(1), inst.op1_kind()),
     };
-    let rand_imm_val = randomize_immediate_value(imm);
+    let rand_imm_val = random_immediate_value(kind)?;
     let imm_delta: u64 = rand_imm_val.abs_diff(imm);
     let mut fix_inst = inst.clone();
     if inst.mnemonic() == Mnemonic::Push {
