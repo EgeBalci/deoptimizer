@@ -11,25 +11,28 @@ pub fn apply_rs_transform(
     if !is_rs_compatible(inst) {
         return Err(DeoptimizerError::TransformNotPossible);
     }
-
     // We need to fix the code if it is spesific to any register
     transpose_fixed_register_operand(inst)?;
     let rip = inst.ip();
     let mut info_factory = InstructionInfoFactory::new();
     let info = info_factory.info(&inst);
-
     let mut used_regs = Vec::new();
     for r in info.used_registers() {
-        if r.register().is_segment_register() {
-            continue;
+        if !r.register().is_segment_register() && !(r.register().size() * 8 == 32 && bitness == 64)
+        {
+            used_regs.push(r.register());
         }
-        used_regs.push(r.register());
+    }
+    if used_regs.len() == 0 {
+        return Err(DeoptimizerError::TransformNotPossible);
     }
     let swap_reg = *used_regs.choose(&mut rand::thread_rng()).unwrap();
     let rand_reg =
         get_random_gp_register(bitness == 64, swap_reg.size(), Some(info.used_registers()))?;
     for i in 0..inst.op_count() {
-        if inst.op_kind(i) == OpKind::Register && inst.op_register(i) == swap_reg {
+        if inst.op_kind(i) == OpKind::Register && inst.op_register(i) == swap_reg
+            || inst.op_register(i).full_register() == swap_reg
+        {
             inst.set_op_register(i, rand_reg);
         }
     }
@@ -39,11 +42,18 @@ pub fn apply_rs_transform(
         swap_reg.size() * 8
     ));
     let xchg = Instruction::with2(xchg_code, swap_reg, rand_reg)?;
-
     Ok(rencode(bitness, [xchg, inst.clone(), xchg].to_vec(), rip)?)
 }
 
 pub fn is_rs_compatible(inst: &Instruction) -> bool {
+    let mut info_factory = InstructionInfoFactory::new();
+    let info = info_factory.info(&inst);
+    for r in info.used_registers() {
+        if r.register().full_register() == Register::RSP {
+            return false;
+        }
+    }
+
     !(!inst
         .op_kinds()
         .collect::<Vec<OpKind>>()
