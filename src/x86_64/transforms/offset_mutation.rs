@@ -92,5 +92,6 @@ pub fn is_om_compatible(inst: &Instruction) -> bool {
         || base_reg.is_segment_register()
         || base_reg.is_vector_register()
         || inst.is_stack_instruction()
-        || base_reg == Register::None)
-
+        || base_reg == Register::None
+        || inst.memory_index_scale() != 1)
+}
