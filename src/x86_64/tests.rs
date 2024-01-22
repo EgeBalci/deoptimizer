@@ -2,8 +2,6 @@
 mod tests {
     use crate::x86_64::*;
     use iced_x86::*;
-    use std::fs::File;
-    use std::io::Write;
 
     #[test]
     fn test_ap_transform() {
@@ -537,17 +535,25 @@ mod tests {
         let mut decoder64 = Decoder::new(64, code_32, DecoderOptions::NONE);
         let mut decoder32 = Decoder::new(32, code_32, DecoderOptions::NONE);
         let mut inst = Instruction::default();
+        let mut offset = 0;
         while decoder64.can_decode() {
             decoder64.decode_out(&mut inst);
+            let mut dbs = convert_to_byte_value_instructions(
+                64,
+                &code_64[offset as usize..offset as usize + inst.len()],
+                inst.ip(),
+            )
+            .expect("db convertion failed");
             // let disp_size = inst.memory_displ_size();
             // let mem_disp = inst.memory_displacement64();
-            println!(
-                "[i] {} -> {:?} - ({:?})",
-                inst,
-                inst.code(),
-                inst.mnemonic()
-            );
-            println!("\t--> op1_kind: {:?}", inst.op0_kind());
+            for i in dbs.iter_mut() {
+                println!("[i] {} -> {:?} - ({:?})", i, i.code(), i.mnemonic());
+                i.set_code(Code::DeclareByte);
+                println!(">> {} -> {:?} - {:?}", i, i.code(), i.mnemonic());
+            }
+
+            offset += inst.len();
+            // println!("\t--> op1_kind: {:?}", inst.op0_kind());
             // println!("\t--> mem_disp: {}", mem_disp);
             // println!("\t--> mem_disp_size: {}", disp_size);
             // println!(
@@ -555,6 +561,7 @@ mod tests {
             // mem_disp < u64::pow(2, disp_size * 8) / 2
             // );
         }
+
         println!("i32 MIN: {}", i32::MIN);
         println!("i32 MAX: {}", i32::MAX);
     }

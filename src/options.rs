@@ -1,5 +1,6 @@
 use clap::CommandFactory;
 use clap::Parser;
+use colored::Colorize;
 use hex::FromHexError;
 use log::error;
 use std::fs;
@@ -8,8 +9,10 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ArgParseError {
-    #[error("Target file not found")]
+    #[error("Target file not found.")]
     FileNotFound,
+    #[error("Invalid offset values.")]
+    InvalidOffsetValues,
     #[error("Address parsing failed: {0}")]
     AddressParseError(#[from] FromHexError),
     #[error("IO Error: {0}")]
@@ -49,6 +52,10 @@ pub struct Options {
     /// start address in hexadecimal form.
     #[arg(long, short = 'A', default_value_t = String::from("0x0000000000000000"))]
     pub addr: String,
+
+    /// File offset range for not deoptimizing (eg: 0-10 for skipping first ten bytes).
+    #[arg(long, value_parser, num_args = 1.., value_delimiter = '-')]
+    pub skip_offsets: Vec<u32>,
 
     /// total number of deoptimization cycles.
     #[arg(long, short = 'c', default_value_t = 1)]
@@ -93,6 +100,17 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
         opts.outfile = opts.source.clone();
     }
 
+    if opts.skip_offsets.len() % 2 != 0 {
+        return Err(ArgParseError::InvalidOffsetValues);
+    }
+
+    let mut i = 0;
+    while i < opts.skip_offsets.len() - 1 {
+        if opts.skip_offsets[i] >= opts.skip_offsets[i + 1] {
+            return Err(ArgParseError::InvalidOffsetValues);
+        }
+        i += 2;
+    }
     if opts.verbose {
         log::set_max_level(log::LevelFilter::Debug);
     }
@@ -102,39 +120,65 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
     Ok(opts)
 }
 
-// pub fn summarize_options(opts: &Options) {
-//     if opts.quiet {
-//         return;
-//     }
-//     let mut mode = String::from("client");
-//     let mut enc_mode = DEFAULT_E2E_CIPHER.to_string();
-//
-//     if opts.listen {
-//         mode = String::from("server");
-//     }
-//     if opts.no_encryption {
-//         enc_mode = "DISABLED".red().bold().to_string();
-//     } else if opts.no_e2e {
-//         enc_mode = String::from("TLS");
-//     }
-//
-//     println!(
-//         "{} {}",
-//         "[#]".yellow().bold(),
-//         ".:: QSocket Lite ::.".blue().bold()
-//     );
-//     println!("{} Secret: {}", " ├──>".yellow(), opts.secret.red());
-//     println!("{} Mode: {}", " ├──>".yellow(), mode);
-//     if !opts.cert_fingerprint.is_empty() {
-//         println!("{} Cert. Pinning: true", " ├──>".yellow());
-//     }
-//     println!("{} Probe Interval: {}", " ├──>".yellow(), opts.probe);
-//     if !opts.proxy_addr.is_empty() {
-//         println!("{} Proxy: {}", " ├──>".yellow(), opts.proxy_addr);
-//     }
-//     if !opts.forward_addr.is_empty() {
-//         println!("{} Forward: {}", " ├──>".yellow(), opts.forward_addr);
-//     }
-//     println!("{} Encryption: {}", " └──>".yellow(), enc_mode);
-//     println!();
-// }
+pub fn print_summary(opts: &Options) {
+    let mut wspace = 48;
+    if opts.file.len() > wspace {
+        wspace = opts.file.len() + (wspace / 4)
+    }
+    let freq_str = format!("%{:.4}", opts.freq * 100.0);
+    println!(
+        "\n[ {} {} {} ]",
+        "#".repeat(wspace / 2 + 2).yellow().bold(),
+        "OPTIONS".green().bold(),
+        "#".repeat(wspace / 2 + 2).yellow().bold()
+    );
+    println!(
+        "| {} {}{}|",
+        "Architecture:".blue().bold(),
+        opts.arch,
+        " ".repeat(wspace - opts.arch.len())
+    ); // 17 chars
+    println!(
+        "| {} {}{}|",
+        "Input File:  ".blue().bold(),
+        opts.file,
+        " ".repeat(wspace - opts.file.len())
+    );
+    println!(
+        "| {} {}{}|",
+        "Output File: ".blue().bold(),
+        opts.outfile,
+        " ".repeat(wspace - opts.outfile.len())
+    );
+    println!(
+        "| {} {}{}|",
+        "Bitness:     ".blue().bold(),
+        opts.bitness,
+        " ".repeat(wspace - 2)
+    );
+    println!(
+        "| {} {}{}|",
+        "Start Addr:  ".blue().bold(),
+        opts.addr,
+        " ".repeat(wspace - opts.addr.len())
+    );
+    println!(
+        "| {} {}{}|",
+        "Frequency:   ".blue().bold(),
+        freq_str,
+        " ".repeat(wspace - freq_str.len())
+    );
+    println!(
+        "| {} {}{}|",
+        "Cycle Count: ".blue().bold(),
+        opts.cycle,
+        " ".repeat(wspace - 1)
+    );
+    println!(
+        "[ {} {}{}]",
+        "Transforms:  ".blue().bold(),
+        opts.transforms,
+        " ".repeat(wspace - opts.transforms.len())
+    );
+    print!("\n");
+}

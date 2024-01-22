@@ -20,6 +20,26 @@ pub fn random_immediate_value(kind: OpKind) -> Result<u64, DeoptimizerError> {
     })
 }
 
+pub fn new_byte_value_instruction(byte: u8) -> Instruction {
+    let mut db = Instruction::with(Code::DeclareByte);
+    db.set_declare_data_len(1);
+    db.set_declare_byte_value(0, byte);
+    db
+}
+
+pub fn convert_to_byte_value_instructions(
+    bitness: u32,
+    bytes: &[u8],
+    rip: u64,
+) -> Result<Vec<Instruction>, DeoptimizerError> {
+    let mut result = Vec::new();
+    // let bytes = get_instruction_bytes(bitness, [inst].to_vec())?;
+    for b in bytes.iter() {
+        result.push(new_byte_value_instruction(*b));
+    }
+    Ok(rencode(bitness, result, rip)?)
+}
+
 pub fn adjust_instruction_addr(code: &mut Vec<Instruction>, start_addr: u64) {
     let mut new_ip = start_addr;
     for inst in code.iter_mut() {
@@ -57,14 +77,39 @@ pub fn get_instruction_bytes(bitness: u32, insts: Vec<Instruction>) -> Result<Ve
     Ok(buffer)
 }
 
+pub fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+pub fn generate_random_instructions(size: usize) -> Vec<u8> {
+    let small_mnemonics = [
+        0x90, // nop
+        0xc3, // ret
+        0xf1, // int1
+        0xf4, // hlt
+        0xf5, // cmc
+        0xf8, // clc
+        0xfa, // cli
+        0xf9, // stc
+        0xfb, // sti
+        0xfc, // cld
+    ]
+    .to_vec();
+    let mut output = Vec::new();
+    for _ in 0..size {
+        output.push(*small_mnemonics.choose(&mut rand::thread_rng()).unwrap() as u8)
+    }
+    output
+}
+
 pub fn print_inst_diff(inst: &Instruction, dinst: Vec<Instruction>) {
-    if log::max_level() < log::Level::Info || dinst.len() == 0 {
+    if log::max_level() <= log::Level::Info || dinst.len() == 0 {
         return;
     }
-
-    let inst_column_len = 40;
+    let inst_column_len = 48;
     let inst_str = format!("{}", inst);
-
     if dinst.len() != 1 || format!("{}", dinst.first().unwrap()) != inst_str {
         print!(
             "{:016X}:\t{}{}>",
@@ -375,9 +420,9 @@ pub fn get_random_gp_register(
     // Remove excluded registers
     if let Some(list) = exclude_list {
         for ex in list {
-            let index = shuffed_regs
-                .iter()
-                .position(|x| x.full_register() == ex.register().full_register());
+            let index = shuffed_regs.iter().position(|x| {
+                x.full_register() == ex.register().full_register() || x == &ex.register()
+            });
             if index.is_some() {
                 shuffed_regs.remove(index.unwrap());
             }

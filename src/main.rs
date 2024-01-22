@@ -1,7 +1,6 @@
 use base64::prelude::*;
 use colored::Colorize;
 use log::{error, info, warn, LevelFilter};
-use std::error;
 use std::fs::File;
 use std::io::Write;
 
@@ -24,7 +23,7 @@ fn main() {
     };
 
     print_banner();
-    print_summary(&opts);
+    options::print_summary(&opts);
 
     if opts.arch.to_lowercase() != "x86" {
         error!("Currently only x86 architecture is supported.");
@@ -55,6 +54,7 @@ fn main() {
     let mut deopt = x86_64::Deoptimizer::new();
     deopt.freq = opts.freq;
     deopt.allow_invalid = opts.allow_invalid;
+    deopt.set_skipped_offsets(opts.skip_offsets);
     if let Err(e) = deopt.set_transform_gadgets(opts.transforms) {
         error!("{}", e);
         return;
@@ -70,25 +70,31 @@ fn main() {
             return;
         }
     };
-    info!("Analyzing input binary...");
-    let acode = match deopt.analyze(&file, opts.bitness, start_addr) {
-        Ok(ac) => ac,
-        Err(e) => {
-            error!("{}", e);
-            return;
-        }
-    };
-    info!("Deoptimizing...");
-    let bin = deopt.deoptimize(&acode);
-    let bytes = match bin {
-        Ok(b) => b,
-        Err(e) => {
-            error!("{}", e);
-            return;
-        }
-    };
+
+    let mut input = file.clone();
+    let mut output = Vec::new();
+    for _ in 0..opts.cycle {
+        info!("Analyzing input binary...");
+        let acode = match deopt.analyze(&input, opts.bitness, start_addr) {
+            Ok(ac) => ac,
+            Err(e) => {
+                error!("{}", e);
+                return;
+            }
+        };
+        info!("Deoptimizing...");
+        output = match deopt.deoptimize(&acode) {
+            Ok(b) => b,
+            Err(e) => {
+                error!("{}", e);
+                return;
+            }
+        };
+        input = output.clone();
+    }
+
     if opts.source.is_empty() {
-        match out_file.write_all(&bytes) {
+        match out_file.write_all(&output) {
             Ok(()) => (),
             Err(e) => {
                 error!("{}", e);
@@ -97,7 +103,7 @@ fn main() {
         }
         info!("De-optimized binary written into {}", opts.outfile);
     } else {
-        let source = match deopt.disassemble(opts.bitness, start_addr, bytes) {
+        let source = match deopt.disassemble(opts.bitness, start_addr, output) {
             Ok(s) => s,
             Err(e) => {
                 error!("{}", e);
@@ -115,69 +121,6 @@ fn main() {
     }
 
     println!("{} All done!", "[✔]".green().bold());
-}
-
-fn print_summary(opts: &options::Options) {
-    let mut wspace = 48;
-    if opts.file.len() > wspace {
-        wspace = opts.file.len() + (wspace / 4)
-    }
-    let freq_str = format!("%{:.4}", opts.freq * 100.0);
-    println!(
-        "\n[ {} {} {} ]",
-        "#".repeat(wspace / 2 + 2).yellow().bold(),
-        "OPTIONS".green().bold(),
-        "#".repeat(wspace / 2 + 2).yellow().bold()
-    );
-    println!(
-        "| {} {}{}|",
-        "Architecture:".blue().bold(),
-        opts.arch,
-        " ".repeat(wspace - opts.arch.len())
-    ); // 17 chars
-    println!(
-        "| {} {}{}|",
-        "Input File:  ".blue().bold(),
-        opts.file,
-        " ".repeat(wspace - opts.file.len())
-    );
-    println!(
-        "| {} {}{}|",
-        "Output File: ".blue().bold(),
-        opts.outfile,
-        " ".repeat(wspace - opts.outfile.len())
-    );
-    println!(
-        "| {} {}{}|",
-        "Bitness:     ".blue().bold(),
-        opts.bitness,
-        " ".repeat(wspace - 2)
-    );
-    println!(
-        "| {} {}{}|",
-        "Start Addr:  ".blue().bold(),
-        opts.addr,
-        " ".repeat(wspace - opts.addr.len())
-    );
-    println!(
-        "| {} {}{}|",
-        "Frequency:   ".blue().bold(),
-        freq_str,
-        " ".repeat(wspace - freq_str.len())
-    );
-    println!(
-        "| {} {}{}|",
-        "Cycle Count: ".blue().bold(),
-        opts.cycle,
-        " ".repeat(wspace - 1)
-    );
-    println!(
-        "[ {} {}{}]",
-        "Transforms:  ".blue().bold(),
-        opts.transforms,
-        " ".repeat(wspace - opts.transforms.len())
-    );
-    print!("\n");
 }
 
 fn print_banner() {
