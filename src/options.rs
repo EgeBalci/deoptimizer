@@ -100,17 +100,24 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
         opts.outfile = opts.source.clone();
     }
 
-    if opts.skip_offsets.len() % 2 != 0 {
-        return Err(ArgParseError::InvalidOffsetValues);
+    if opts.outfile.is_empty() {
+        opts.outfile = format!("{}_deopt.bin", opts.file);
     }
 
-    let mut i = 0;
-    while i < opts.skip_offsets.len() - 1 {
-        if opts.skip_offsets[i] >= opts.skip_offsets[i + 1] {
+    if opts.skip_offsets.len() > 0 {
+        if opts.skip_offsets.len() % 2 != 0 {
             return Err(ArgParseError::InvalidOffsetValues);
         }
-        i += 2;
+
+        let mut i = 0;
+        while i < opts.skip_offsets.len() - 1 {
+            if opts.skip_offsets[i] >= opts.skip_offsets[i + 1] {
+                return Err(ArgParseError::InvalidOffsetValues);
+            }
+            i += 2;
+        }
     }
+
     if opts.verbose {
         log::set_max_level(log::LevelFilter::Debug);
     }
