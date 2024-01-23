@@ -20,31 +20,15 @@ pub fn random_immediate_value(kind: OpKind) -> Result<u64, DeoptimizerError> {
     })
 }
 
-pub fn new_byte_value_instruction(byte: u8) -> Instruction {
-    let mut db = Instruction::with(Code::DeclareByte);
-    db.set_declare_data_len(1);
-    db.set_declare_byte_value(0, byte);
-    db
-}
-
-pub fn convert_to_byte_value_instructions(
-    bitness: u32,
-    bytes: &[u8],
-    rip: u64,
-) -> Result<Vec<Instruction>, DeoptimizerError> {
-    let mut result = Vec::new();
-    // let bytes = get_instruction_bytes(bitness, [inst].to_vec())?;
-    for b in bytes.iter() {
-        result.push(new_byte_value_instruction(*b));
-    }
-    Ok(rencode(bitness, result, rip)?)
-}
-
-pub fn adjust_instruction_addr(code: &mut Vec<Instruction>, start_addr: u64) {
+pub fn adjust_instruction_addrs(code: &mut Vec<Instruction>, start_addr: u64) {
     let mut new_ip = start_addr;
     for inst in code.iter_mut() {
         inst.set_ip(new_ip);
-        new_ip = inst.next_ip();
+        if inst.ip() == inst.next_ip() && inst.code() == Code::DeclareByte {
+            new_ip += 1
+        } else {
+            new_ip = inst.next_ip();
+        }
     }
 }
 

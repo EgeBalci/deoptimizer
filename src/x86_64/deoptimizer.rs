@@ -205,31 +205,25 @@ impl Deoptimizer {
         false
     }
 
-    // fn replace_skipped_offsets(&mut self, bytes: Vec<u8>) -> Result<Vec<u8>, DeoptimizerError> {
-    //     if self.skipped_offsets.is_none() {
-    //         return Ok(bytes);
-    //     }
-    //     let mut my_bytes = bytes.clone();
-    //     for (b1, b2) in self.skipped_offsets.clone().unwrap() {
-    //         let b1_index = find_subsequence(bytes.as_slice(), b1.as_slice());
-    //         let b2_index = find_subsequence(bytes.as_slice(), b2.as_slice());
-    //         if b1_index.is_none() && b2_index.is_none() {
-    //             return Err(DeoptimizerError::OffsetSkipFail);
-    //         }
-    //         if b1_index.is_some() {
-    //             my_bytes.splice(
-    //                 b1_index.unwrap() as usize..b1_index.unwrap() as usize + b1.len(),
-    //                 b2.to_vec(),
-    //             );
-    //         } else {
-    //             my_bytes.splice(
-    //                 b2_index.unwrap() as usize..b2_index.unwrap() as usize + b2.len(),
-    //                 b1.to_vec(),
-    //             );
-    //         }
-    //     }
-    //     Ok(my_bytes)
-    // }
+    fn replace_skipped_offsets(
+        &mut self,
+        bytes: &[u8],
+        fill: u8,
+    ) -> Result<Vec<u8>, DeoptimizerError> {
+        if self.skipped_offsets.is_none() {
+            return Ok(bytes.to_vec());
+        }
+        let mut replaced_bytes = Vec::new();
+        trace!("Replacing skipped offsets with NOPs...");
+        for (i, b) in bytes.iter().enumerate() {
+            if self.is_offset_skipped(i as u32) {
+                replaced_bytes.push(fill);
+                continue;
+            }
+            replaced_bytes.push(*b);
+        }
+        Ok(replaced_bytes)
+    }
 
     pub fn analyze(
         &mut self,
@@ -244,22 +238,10 @@ impl Deoptimizer {
         );
 
         let mut decoder = Decoder::with_ip(bitness, bytes, start_addr, DecoderOptions::NONE);
-        let mut replaced_bytes = Vec::new();
+        let replaced_bytes: Vec<u8>;
         if self.skipped_offsets.is_some() {
-            trace!("Replacing skipped offsets with NOPs...");
-            for (i, b) in bytes.iter().enumerate() {
-                if self.is_offset_skipped(i as u32) {
-                    replaced_bytes.push(0x90);
-                    continue;
-                }
-                replaced_bytes.push(*b);
-            }
-            decoder = Decoder::with_ip(
-                bitness,
-                replaced_bytes.as_slice(),
-                start_addr,
-                DecoderOptions::NONE,
-            );
+            replaced_bytes = self.replace_skipped_offsets(&bytes.clone(), 0x90)?;
+            decoder = Decoder::with_ip(bitness, &replaced_bytes, start_addr, DecoderOptions::NONE);
         }
 
         let mut inst = Instruction::default();
@@ -272,13 +254,9 @@ impl Deoptimizer {
         while decoder.can_decode() {
             decoder.decode_out(&mut inst);
             if self.is_offset_skipped(offset) {
-                if inst.len() != 1 {
-                    error!("unskippable => {}", inst);
-                }
                 let mut db = Instruction::with_declare_byte_1(bytes[offset as usize]);
                 db.set_ip(inst.ip());
                 db.set_code(Code::DeclareByte);
-                // warn!("{:016X}: {}", db.ip(), db);
                 // Push to known address table
                 known_addr_table.push(db.ip());
                 addr_map.insert(db.ip(), db);
@@ -489,7 +467,6 @@ impl Deoptimizer {
             if acode.is_branch_target(inst.ip()) {
                 ip_to_index_table.insert(inst.ip(), result.len());
             }
-            // inst.set_ip(new_ip);
             match Deoptimizer::apply_transform(
                 acode.bitness,
                 &inst,
@@ -497,7 +474,6 @@ impl Deoptimizer {
                 self.transforms.clone(),
             ) {
                 Ok(dinst) => {
-                    // new_ip = dinst.last().unwrap().next_ip();
                     result = [result, dinst.clone()].concat();
                     print_inst_diff(&inst, dinst);
                     continue;
@@ -506,11 +482,10 @@ impl Deoptimizer {
                     trace!("TransformError: {e} => [{}]", inst);
                 }
             }
-            // new_ip = inst.next_ip();
             result.push(inst);
             print_inst_diff(&inst, [inst].to_vec());
         }
-        adjust_instruction_addr(&mut result, acode.start_addr);
+        adjust_instruction_addrs(&mut result, acode.start_addr);
 
         for (i, inst) in result.iter().enumerate() {
             let bt = get_branch_target(inst).unwrap_or(0);
@@ -521,7 +496,6 @@ impl Deoptimizer {
                 } else {
                     error!("Could not find branch fix entry for: {}", inst);
                 }
-                continue;
             }
         }
 
@@ -532,7 +506,7 @@ impl Deoptimizer {
                 if index_to_index_table.contains_key(&i) {
                     if let Some(idx) = index_to_index_table.get(&i) {
                         trace!(
-                            "Adjusting BT: 0x{:X} {} -> 0x{:X} {}",
+                            "BT: 0x{:X} {} -> 0x{:X} {}",
                             result[i].ip(),
                             result[i],
                             result[*idx].ip(),
@@ -543,7 +517,7 @@ impl Deoptimizer {
                             result[*idx].ip(),
                             acode.bitness,
                         )?;
-                        adjust_instruction_addr(&mut result, acode.start_addr);
+                        adjust_instruction_addrs(&mut result, acode.start_addr);
                     } else {
                         error!("Could not find branch fix entry for: {}", result[i]);
                     }
@@ -555,7 +529,7 @@ impl Deoptimizer {
                 fin_address = result.last().unwrap().ip();
             }
         }
-        adjust_instruction_addr(&mut result, acode.start_addr);
+        adjust_instruction_addrs(&mut result, acode.start_addr);
         let mut encoder = Encoder::new(acode.bitness);
         let mut buffer = Vec::new();
         for inst in result.clone() {
