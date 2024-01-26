@@ -132,6 +132,10 @@ pub fn print_summary(opts: &Options) {
     if opts.file.len() > wspace {
         wspace = opts.file.len() + (wspace / 4)
     }
+    if opts.outfile.len() > wspace {
+        wspace = opts.outfile.len() + (wspace / 4)
+    }
+
     let freq_str = format!("%{:.4}", opts.freq * 100.0);
     println!(
         "\n[ {} {} {} ]",
