@@ -240,7 +240,7 @@ impl Deoptimizer {
         let mut decoder = Decoder::with_ip(bitness, bytes, start_addr, DecoderOptions::NONE);
         let replaced_bytes: Vec<u8>;
         if self.skipped_offsets.is_some() {
-            replaced_bytes = self.replace_skipped_offsets(&bytes.clone(), 0x90)?;
+            replaced_bytes = self.replace_skipped_offsets(&bytes, 0x90)?;
             decoder = Decoder::with_ip(bitness, &replaced_bytes, start_addr, DecoderOptions::NONE);
         }
 

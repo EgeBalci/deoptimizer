@@ -28,6 +28,18 @@ pub fn apply_ap_transform(
             0,
         )?;
     }
+    if inst.mnemonic() == Mnemonic::Pop {
+        let mut info_factory = InstructionInfoFactory::new();
+        let info = info_factory.info(&inst);
+        let op0_size = get_op_size(0, inst)? * 8;
+        let rand_reg =
+            get_random_gp_register(bitness == 64, op0_size, Some(info.used_registers()))?;
+        fix_inst = Instruction::with1(
+            get_code_with_str(&format!("Xchg_rm{op0_size}_rm{op0_size}")),
+            rand_reg,
+        )?;
+        return Ok(rencode(bitness, [*inst, fix_inst].to_vec(), rip)?);
+    }
     if inst.mnemonic() == Mnemonic::Mov && inst.op1_kind() == OpKind::Immediate64 {
         set_op_immediate(inst, 1, !imm)?;
         fix_inst = Instruction::with1(get_code_with_str("Not_rm64"), inst.op0_register())?;

@@ -536,6 +536,20 @@ mod tests {
         let mut decoder32 = Decoder::new(32, code_32, DecoderOptions::NONE);
         let mut inst = Instruction::default();
         let mut offset = 0;
+
+        fn convert_to_byte_value_instructions(
+            bitness: u32,
+            bytes: &[u8],
+            rip: u64,
+        ) -> Result<Vec<Instruction>, DeoptimizerError> {
+            let mut result = Vec::new();
+            // let bytes = get_instruction_bytes(bitness, [inst].to_vec())?;
+            for b in bytes.iter() {
+                result.push(Instruction::with_declare_byte_1(*b));
+            }
+            Ok(rencode(bitness, result, rip)?)
+        }
+
         while decoder64.can_decode() {
             decoder64.decode_out(&mut inst);
             let mut dbs = convert_to_byte_value_instructions(
