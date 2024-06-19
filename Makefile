@@ -17,8 +17,8 @@ linux:
 	${FLAGS} ${CROSS} --target i686-unknown-linux-musl
 	${FLAGS} ${CROSS} --target aarch64-unknown-linux-musl
 darwin:
-	${FLAGS} ${BUILD} --target x86_64-apple-darwin
-	# ${FLAGS} ${BUILD} --target aarch64-apple-darwin
+	${BUILD} --target x86_64-apple-darwin
+	${BUILD} --target aarch64-apple-darwin
 
 
 all: linux windows darwin 
