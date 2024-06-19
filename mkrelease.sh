@@ -69,25 +69,29 @@ print_status "[$(date --rfc-3339=date)] Packaging new release for version $VERSI
 mkdir -p "$RELEASE_DIR" &> "$ERR_LOG"
 
 tar czvf "$RELEASE_DIR/deoptimizer_linux_x86_64_v$VERSION.tar.gz"\
-  "./target/x86_64-unknown-linux-musl/release/deoptimizer" &> "$ERR_LOG" || print_fatal "Linux x86_64 release failed!"
+  -C  "./target/x86_64-unknown-linux-musl/release/"\
+  "deoptimizer" &> "$ERR_LOG" || print_fatal "Linux x86_64 release failed!"
 
 tar czvf "$RELEASE_DIR/deoptimizer_linux_i686_v$VERSION.tar.gz"\
-  "./target/i686-unknown-linux-musl/release/deoptimizer" &> "$ERR_LOG" || print_fatal "Linux i686 release failed!"
+  -C "./target/i686-unknown-linux-musl/release/"\
+  "deoptimizer" &> "$ERR_LOG" || print_fatal "Linux i686 release failed!"
 
 tar czvf "$RELEASE_DIR/deoptimizer_linux_aarch64_v$VERSION.tar.gz"\
-  "./target/aarch64-unknown-linux-musl/release/deoptimizer" &> "$ERR_LOG" || print_fatal "Linux aarch64 release failed!"
+  -C "./target/aarch64-unknown-linux-musl/release/"\
+  "deoptimizer" &> "$ERR_LOG" || print_fatal "Linux aarch64 release failed!"
 
 tar czvf "$RELEASE_DIR/deoptimizer_windows_x86_64_v$VERSION.tar.gz"\
-  "./target/x86_64-pc-windows-gnu/release/deoptimizer.exe" &> "$ERR_LOG" || print_fatal "Windows x86_64 release failed!"
+  -C "./target/x86_64-pc-windows-gnu/release/"\
+  "deoptimizer.exe" &> "$ERR_LOG" || print_fatal "Windows x86_64 release failed!"
 
 tar czvf "$RELEASE_DIR/deoptimizer_windows_i686_v$VERSION.tar.gz"\
-  "./target/i686-pc-windows-gnu/release/deoptimizer.exe" &> "$ERR_LOG" || print_fatal "Windows i686 release failed!"
-
+  -C "./target/i686-pc-windows-gnu/release/"\
+  "deoptimizer.exe" &> "$ERR_LOG" || print_fatal "Windows i686 release failed!"
 
 
 print_good "All done!"
 
-cd $RELEASE_DIR
+cd "$RELEASE_DIR" || exit
 echo -e "\n\`\`\`"
-sha1sum *
+sha1sum ./*
 echo -e "\`\`\`\n"

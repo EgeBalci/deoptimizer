@@ -11,32 +11,52 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Build
       run: cargo build --release --verbose
     - name: Run tests
       run: cargo test --verbose
+    - uses: actions/upload-artifact@v4
+      with:
+        name: deoptimizer-linux-x86_64 
+        path: ./target/release/deoptimizer
+        retention-days: 5
   build-windows:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Build
       run: cargo build --release --verbose
     - name: Run tests
       run: cargo test --verbose
+    - uses: actions/upload-artifact@v4
+      with:
+        name: deoptimizer-windows-x86_64 
+        path: ./target/release/deoptimizer.exe
+        retention-days: 5
   build-macos-x86:
     runs-on: macos-13
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Build
       run: cargo build --release --verbose
     - name: Run tests
       run: cargo test --verbose
+    - uses: actions/upload-artifact@v4
+      with:
+        name: deoptimizer-macos-x86_64 
+        path: ./target/release/deoptimizer
+        retention-days: 5
   build-macos-arm64:
     runs-on: macos-14
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Build
       run: cargo build --release --verbose
     - name: Run tests
       run: cargo test --verbose
+    - uses: actions/upload-artifact@v4
+      with:
+        name: deoptimizer-macos-aarch64 
+        path: ./target/release/deoptimizer
+        retention-days: 5
