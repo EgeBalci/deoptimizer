@@ -1,3 +1,4 @@
+use clap::crate_version;
 use clap::CommandFactory;
 use clap::Parser;
 use colored::Colorize;
@@ -6,6 +7,8 @@ use log::error;
 use std::fs;
 use std::process;
 use thiserror::Error;
+
+const VERSION: &str = crate_version!();
 
 #[derive(Error, Debug)]
 pub enum ArgParseError {
@@ -22,7 +25,7 @@ pub enum ArgParseError {
 /// QSocket toolkit options.
 #[derive(Parser, PartialEq, Debug)]
 #[command(name = "Deoptimizer")]
-#[command(version = "1.0.0")]
+#[command(version = VERSION)]
 #[command(about = "Machine code deoptimizer.", long_about = None)]
 pub struct Options {
     /// Target architecture (x86/arm).
