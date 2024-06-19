@@ -17,12 +17,15 @@ pub fn apply_rs_transform(
     let mut info_factory = InstructionInfoFactory::new();
     let info = info_factory.info(&inst);
     let mut used_regs = Vec::new();
-    for r in info.used_registers() {
-        if !r.register().is_segment_register() && !(r.register().size() * 8 == 32 && bitness == 64)
-        {
-            used_regs.push(r.register());
+    for i in 0..inst.op_count() {
+        if inst.op_kind(i) != OpKind::Register {
+            continue;
+        }
+        if !(inst.op_register(i).size() * 8 == 32 && bitness == 64) {
+            used_regs.push(inst.op_register(i));
         }
     }
+
     if used_regs.len() == 0 {
         return Err(DeoptimizerError::TransformNotPossible);
     }
