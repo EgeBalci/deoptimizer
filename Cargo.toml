@@ -2,6 +2,14 @@
 name = "deoptimizer"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/EgeBalci/deoptimizer"
+authors = ["Ege BALCI <egebalci@pm.me>"]
+keywords = ["evasion", "malware", "obfuscation", "optimization", "detection", "iced-x86"]
+categories = ["command-line-utilities", "compilers"]
+description = "This tool is a machine code de-optimizer. By transforming/mutating the machine code instructions to their functional equivalents it makes possible to bypass pattern-based detection mechanisms used by security products."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
