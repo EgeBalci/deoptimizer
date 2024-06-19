@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use std::arch::x86_64;
-
     use crate::x86_64::*;
     use iced_x86::*;
 
