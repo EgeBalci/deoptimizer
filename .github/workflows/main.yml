@@ -24,8 +24,16 @@ jobs:
       run: cargo build --release --verbose
     - name: Run tests
       run: cargo test --verbose
-  build-macos:
-    runs-on: macos-latest
+  build-macos-x86:
+    runs-on: macos-13
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build --release --verbose
+    - name: Run tests
+      run: cargo test --verbose
+build-macos-arm64:
+    runs-on: macos-14
     steps:
     - uses: actions/checkout@v3
     - name: Build
