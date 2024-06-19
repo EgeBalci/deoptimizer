@@ -38,6 +38,7 @@ This tool is a machine code de-optimizer. By transforming/mutating the machine c
 Bypassing security products is a very important part of many offensive security engagements. The majority of the current AV evasion techniques used in various different evasion tools, such as packers, shellcode encoders, and obfuscators, are dependent on the use of self-modifying code running on RWE memory regions. Considering the current state of security products, such evasion attempts are easily detected by memory analysis tools such as [Moneta](https://github.com/forrest-orr/moneta) and [Pe-sieve](https://github.com/hasherezade/pe-sieve). This project introduces a new approach to code obfuscation with the use of machine code de-optimization. It uses certain mathematical approaches, such as arithmetic partitioning, logical inverse, polynomial transformation, and logical partitioning, for transforming/mutating the instructions of the target binary without creating any recognizable patterns. The tool is capable of transforming the instructions of a given binary up to ~95% by using the mentioned de-optimization tricks.
 
 **Watch the presentation for more...**
+- [Why So Optimized? - Insomni'hack 2024](https://youtu.be/Issvbst_89I?feature=shared)
 
 ## Installation
 
@@ -59,6 +60,9 @@ docker run -it egee/deoptimizer -h
 ```
 
 ## Usage
+
+> [!WARNING]  
+> This project is still in the development stage! The available transform gadgets, functions, and command line parameter names may be adjusted, backward compatibility is not guaranteed.
 
 ```
 Machine code deoptimizer.
