@@ -22,7 +22,7 @@ pub enum ArgParseError {
     IoError(#[from] std::io::Error),
 }
 
-/// QSocket toolkit options.
+/// Deoptimizer options.
 #[derive(Parser, PartialEq, Debug)]
 #[command(name = "Deoptimizer")]
 #[command(version = VERSION)]
