@@ -9,7 +9,6 @@
   [![Build][workflow-img]][workflow]
   [![Issues][issues-img]][issues]
   [![Crates][crates-img]][crates]
-  ![Docker Pulls][docker-pulls]
   [![License: MIT][license-img]][license]
 </div>
 
@@ -21,7 +20,6 @@
 [downloads-img]: https://img.shields.io/github/downloads/EgeBalci/deoptimizer/total?logo=github
 [issues]: https://github.com/EgeBalci/deoptimizer/issues
 [issues-img]: https://img.shields.io/github/issues/EgeBalci/deoptimizer?color=red
-[docker-pulls]: https://img.shields.io/docker/pulls/EgeBalci/EgeBalci?logo=docker&label=docker%20pulls
 [license]: https://raw.githubusercontent.com/EgeBalci/deoptimizer/master/LICENSE
 [license-img]: https://img.shields.io/github/license/EgeBalci/deoptimizer.svg
 [google-cloud-shell]: https://console.cloud.google.com/cloudshell/open?git_repo=https://github.com/EgeBalci/deoptimizer&tutorial=README.md
