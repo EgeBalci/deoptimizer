@@ -62,6 +62,12 @@ docker run -it egee/deoptimizer -h
 > [!WARNING]  
 > This project is still in the development stage! The available transform gadgets, functions, and command line parameter names may be adjusted, backward compatibility is not guaranteed.
 
+<div align="center">
+  <img src=".github/img/quick-demo.gif">
+</div>
+
+---
+
 ```
 Machine code deoptimizer.
 
