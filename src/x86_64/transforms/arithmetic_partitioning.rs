@@ -18,7 +18,7 @@ pub fn apply_ap_transform(
     };
     let rand_imm_val = random_immediate_value(kind)?;
     let imm_delta: u64 = rand_imm_val.abs_diff(imm);
-    let mut fix_inst = inst.clone();
+    let mut fix_inst = *inst;
     if inst.mnemonic() == Mnemonic::Push {
         let sp_reg = get_stack_pointer_register(bitness)?;
         let op0_size = get_op_size(0, inst)? * 8;
@@ -30,7 +30,7 @@ pub fn apply_ap_transform(
     }
     if inst.mnemonic() == Mnemonic::Pop {
         let mut info_factory = InstructionInfoFactory::new();
-        let info = info_factory.info(&inst);
+        let info = info_factory.info(inst);
         let op0_size = get_op_size(0, inst)? * 8;
         let rand_reg =
             get_random_gp_register(bitness == 64, op0_size, Some(info.used_registers()))?;

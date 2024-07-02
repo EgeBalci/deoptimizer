@@ -91,7 +91,7 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
     // let mut opts: Options = argh::from_env();
     let mut opts = Options::parse();
     if opts.file.is_empty() {
-        print!("\n");
+        println!();
         error!("The '-f' parameter is mandatory.\n");
         Options::command().print_help()?;
         process::exit(0x01);
@@ -120,11 +120,11 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
 }
 
 pub fn parse_offset(offsets: &str) -> Result<(u32, u32), ArgParseError> {
-    if offsets.matches("-").count() != 1 {
+    if offsets.matches('-').count() != 1 {
         return Err(ArgParseError::InvalidOffsetValues);
     }
     let mut off: Vec<u32> = Vec::new();
-    for part in offsets.split("-") {
+    for part in offsets.split('-') {
         if part.starts_with("0x") {
             off.push(u32::from_str_radix(part.trim_start_matches("0x"), 16)?)
         } else {
@@ -201,5 +201,5 @@ pub fn print_summary(opts: &Options) {
         opts.transforms,
         " ".repeat(wspace - opts.transforms.len())
     );
-    print!("\n");
+    println!();
 }

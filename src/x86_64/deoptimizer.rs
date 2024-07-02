@@ -2,27 +2,31 @@ use crate::x86_64::*;
 use bitflags::bitflags;
 use iced_x86::code_asm::*;
 use iced_x86::*;
-use log::{debug, error, info, trace, warn};
-use rand::{seq::SliceRandom, Rng};
+use log::{error, info, trace, warn};
+use rand::Rng;
 use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum DeoptimizerError {
+    // #[error("Instruction with unexpected operand count.")]
+    // UnexpectedOperandCount,
+    // #[error("Given instruction not found in code map.")]
+    // InstructionNotFound,
+    // #[error("Code analysis results are not found.")]
+    // MissingCodeAnalysis,
+    // #[error("Near branch value too large.")]
+    // NearBranchTooBig,
+    // #[error("Unexpected memory size given.")]
+    // UnexpectedMemorySize,
+    // #[error("Offset skipping failed!")]
+    // OffsetSkipFail,
     #[error("Invalid formatter syntax.")]
     InvalidSyntax,
     #[error("Invalid processor mode(bitness). (16/32/64 accepted)")]
     InvalidProcessorMode,
-    #[error("Instruction with unexpected operand count.")]
-    UnexpectedOperandCount,
     #[error("All available instruction transform gadgets failed.")]
     AllTransformsFailed,
-    #[error("Given instruction not found in code map.")]
-    InstructionNotFound,
-    #[error("Code analysis results are not found.")]
-    MissingCodeAnalysis,
-    #[error("Near branch value too large.")]
-    NearBranchTooBig,
     #[error("Far branch value too large.")]
     FarBranchTooBig,
     #[error("Found invalid instruction.")]
@@ -31,8 +35,6 @@ pub enum DeoptimizerError {
     BracnhTargetNotFound,
     #[error("This transform not possible for given instruction.")]
     TransformNotPossible,
-    #[error("Unexpected memory size given.")]
-    UnexpectedMemorySize,
     #[error("Unexpected register size given.")]
     UnexpectedRegisterSize,
     #[error("Unexpected operand type encountered.")]
@@ -45,8 +47,6 @@ pub enum DeoptimizerError {
     TransposeFailed,
     #[error("Invalid transform gadget.")]
     InvalidTransformGadget,
-    #[error("Offset skipping failed!")]
-    OffsetSkipFail,
     #[error("Instruction encoding failed: {0}")]
     EncodingFail(#[from] IcedError),
 }
@@ -58,6 +58,7 @@ enum AssemblySyntax {
     Intel,
     Gas,
 }
+
 bitflags! {
     #[derive(Clone, Copy, Debug,PartialEq,Eq, Hash)]
     pub struct AvailableTransforms: u8 {
@@ -154,8 +155,8 @@ impl Deoptimizer {
 
     pub fn set_transform_gadgets(&mut self, transforms: String) -> Result<(), DeoptimizerError> {
         let mut selected_transforms = AvailableTransforms::None;
-        let trs = transforms.split(",");
-        for (_i, t) in trs.enumerate() {
+        let trs = transforms.split(',');
+        for t in trs {
             match t.to_uppercase().as_str() {
                 "AP" => selected_transforms |= AvailableTransforms::ArithmeticPartitioning,
                 "LI" => selected_transforms |= AvailableTransforms::LogicalInverse,
@@ -182,9 +183,7 @@ impl Deoptimizer {
     }
 
     pub fn set_skipped_offsets(&mut self, skipped: Vec<(u32, u32)>) {
-        if skipped.len() > 0 {
-            self.skipped_offsets = Some(skipped);
-        }
+        self.skipped_offsets = Some(skipped);
     }
 
     fn is_offset_skipped(&self, offset: u32) -> bool {
@@ -234,7 +233,7 @@ impl Deoptimizer {
         let mut decoder = Decoder::with_ip(bitness, bytes, start_addr, DecoderOptions::NONE);
         let replaced_bytes: Vec<u8>;
         if self.skipped_offsets.is_some() {
-            replaced_bytes = self.replace_skipped_offsets(&bytes, 0x90)?;
+            replaced_bytes = self.replace_skipped_offsets(bytes, 0x90)?;
             decoder = Decoder::with_ip(bitness, &replaced_bytes, start_addr, DecoderOptions::NONE);
         }
 
@@ -285,7 +284,7 @@ impl Deoptimizer {
         }
 
         for bt in branch_targets.iter() {
-            if !known_addr_table.contains(&bt) {
+            if !known_addr_table.contains(bt) {
                 warn!(
                     "Branch target 0x{:016X} is outside the known address sapce!",
                     bt
@@ -461,12 +460,7 @@ impl Deoptimizer {
             if acode.is_branch_target(inst.ip()) {
                 ip_to_index_table.insert(inst.ip(), result.len());
             }
-            match Deoptimizer::apply_transform(
-                acode.bitness,
-                &inst,
-                self.freq,
-                self.transforms.clone(),
-            ) {
+            match Deoptimizer::apply_transform(acode.bitness, &inst, self.freq, self.transforms) {
                 Ok(dinst) => {
                     result = [result, dinst.clone()].concat();
                     print_inst_diff(&inst, dinst);
@@ -507,7 +501,7 @@ impl Deoptimizer {
                             result[*idx]
                         );
                         result[i] = set_branch_target(
-                            &mut result[i].clone(),
+                            &result[i].clone(),
                             result[*idx].ip(),
                             acode.bitness,
                         )?;

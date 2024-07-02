@@ -20,7 +20,7 @@ pub fn random_immediate_value(kind: OpKind) -> Result<u64, DeoptimizerError> {
     })
 }
 
-pub fn adjust_instruction_addrs(code: &mut Vec<Instruction>, start_addr: u64) {
+pub fn adjust_instruction_addrs(code: &mut [Instruction], start_addr: u64) {
     let mut new_ip = start_addr;
     for inst in code.iter_mut() {
         inst.set_ip(new_ip);
@@ -61,35 +61,35 @@ pub fn get_instruction_bytes(bitness: u32, insts: Vec<Instruction>) -> Result<Ve
     Ok(buffer)
 }
 
-pub fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-pub fn generate_random_instructions(size: usize) -> Vec<u8> {
-    let small_mnemonics = [
-        0x90, // nop
-        0xc3, // ret
-        0xf1, // int1
-        0xf4, // hlt
-        0xf5, // cmc
-        0xf8, // clc
-        0xfa, // cli
-        0xf9, // stc
-        0xfb, // sti
-        0xfc, // cld
-    ]
-    .to_vec();
-    let mut output = Vec::new();
-    for _ in 0..size {
-        output.push(*small_mnemonics.choose(&mut rand::thread_rng()).unwrap() as u8)
-    }
-    output
-}
+// pub fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+//     haystack
+//         .windows(needle.len())
+//         .position(|window| window == needle)
+// }
+//
+// pub fn generate_random_instructions(size: usize) -> Vec<u8> {
+//     let small_mnemonics = [
+//         0x90, // nop
+//         0xc3, // ret
+//         0xf1, // int1
+//         0xf4, // hlt
+//         0xf5, // cmc
+//         0xf8, // clc
+//         0xfa, // cli
+//         0xf9, // stc
+//         0xfb, // sti
+//         0xfc, // cld
+//     ]
+//     .to_vec();
+//     let mut output = Vec::new();
+//     for _ in 0..size {
+//         output.push(*small_mnemonics.choose(&mut rand::thread_rng()).unwrap() as u8)
+//     }
+//     output
+// }
 
 pub fn print_inst_diff(inst: &Instruction, dinst: Vec<Instruction>) {
-    if log::max_level() <= log::Level::Info || dinst.len() == 0 {
+    if log::max_level() <= log::Level::Info || dinst.is_empty() {
         return;
     }
     let inst_column_len = 48;
@@ -119,18 +119,12 @@ pub fn print_inst_diff(inst: &Instruction, dinst: Vec<Instruction>) {
         }
     } else {
         println!(
-            "{:016X}:\t{}|\t{}",
+            "{:016X}:\t{}{}|\t{}{}",
             inst.ip(),
-            format!(
-                "{}{}",
-                inst_str.blue(),
-                " ".repeat(inst_column_len - inst_str.len())
-            ),
-            format!(
-                "{}{}",
-                inst_str.blue(),
-                " ".repeat(inst_column_len - inst_str.len())
-            ),
+            inst_str.blue(),
+            " ".repeat(inst_column_len - inst_str.len()),
+            inst_str.blue(),
+            " ".repeat(inst_column_len - inst_str.len()),
         );
     }
 }
@@ -189,18 +183,18 @@ pub fn transpose_fixed_register_operand(inst: &mut Instruction) -> Result<(), De
 //     }
 // }
 
-pub fn get_immediate_indexes(inst: &Instruction) -> Option<Vec<u32>> {
-    let mut indexes = Vec::new();
-    for i in 0..inst.op_count() {
-        if is_immediate_operand(inst.op_kind(i)) {
-            indexes.push(i);
-        }
-    }
-    if indexes.len() == 0 {
-        return None;
-    }
-    Some(indexes)
-}
+// pub fn get_immediate_indexes(inst: &Instruction) -> Option<Vec<u32>> {
+//     let mut indexes = Vec::new();
+//     for i in 0..inst.op_count() {
+//         if is_immediate_operand(inst.op_kind(i)) {
+//             indexes.push(i);
+//         }
+//     }
+//     if indexes.len() == 0 {
+//         return None;
+//     }
+//     Some(indexes)
+// }
 
 pub fn get_stack_pointer_register(bitness: u32) -> Result<Register, DeoptimizerError> {
     Ok(match bitness {
@@ -234,25 +228,25 @@ pub fn to_db_mnemonic(bytes: &[u8]) -> String {
     db_inst.trim_end_matches(", ").to_string()
 }
 
-pub fn get_register_save_seq(
-    bitness: u32,
-    reg: Register,
-) -> Result<(Instruction, Instruction), DeoptimizerError> {
-    let mut full_reg = reg.full_register();
-    if bitness != 64 {
-        full_reg = reg.full_register32();
-    }
-    let (c1, c2) = match bitness {
-        16 => (Code::Push_r16, Code::Pop_r16),
-        32 => (Code::Push_r32, Code::Pop_r32),
-        64 => (Code::Push_r64, Code::Pop_r64),
-        _ => return Err(DeoptimizerError::InvalidProcessorMode),
-    };
-    Ok((
-        Instruction::with1(c1, full_reg)?,
-        Instruction::with1(c2, full_reg)?,
-    ))
-}
+// pub fn get_register_save_seq(
+//     bitness: u32,
+//     reg: Register,
+// ) -> Result<(Instruction, Instruction), DeoptimizerError> {
+//     let mut full_reg = reg.full_register();
+//     if bitness != 64 {
+//         full_reg = reg.full_register32();
+//     }
+//     let (c1, c2) = match bitness {
+//         16 => (Code::Push_r16, Code::Pop_r16),
+//         32 => (Code::Push_r32, Code::Pop_r32),
+//         64 => (Code::Push_r64, Code::Pop_r64),
+//         _ => return Err(DeoptimizerError::InvalidProcessorMode),
+//     };
+//     Ok((
+//         Instruction::with1(c1, full_reg)?,
+//         Instruction::with1(c2, full_reg)?,
+//     ))
+// }
 
 pub fn get_random_register_value(reg: Register) -> u64 {
     let mut rng = rand::thread_rng();
@@ -288,8 +282,7 @@ pub fn set_branch_target(
     bt: u64,
     bitness: u32,
 ) -> Result<Instruction, DeoptimizerError> {
-    let mut my_inst = inst.clone();
-
+    let mut my_inst = *inst;
     if matches!(inst.op0_kind(), OpKind::FarBranch16 | OpKind::FarBranch32) {
         if bt < u16::MAX as u64 {
             my_inst.set_op0_kind(OpKind::FarBranch16);
@@ -407,15 +400,15 @@ pub fn get_random_gp_register(
             let index = shuffed_regs.iter().position(|x| {
                 x.full_register() == ex.register().full_register() || x == &ex.register()
             });
-            if index.is_some() {
-                shuffed_regs.remove(index.unwrap());
+            if let Some(idx) = index {
+                shuffed_regs.remove(idx);
             }
         }
     }
 
     for reg in shuffed_regs {
         let reg_str = format!("{:?}", reg);
-        let is_extended = reg_str.contains("R") || reg_str.contains("IL") || reg_str.contains("PL");
+        let is_extended = reg_str.contains('R') || reg_str.contains("IL") || reg_str.contains("PL");
         if is_extended == extended {
             return Ok(reg);
         }

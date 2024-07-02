@@ -15,7 +15,7 @@ pub fn apply_rs_transform(
     transpose_fixed_register_operand(inst)?;
     let rip = inst.ip();
     let mut info_factory = InstructionInfoFactory::new();
-    let info = info_factory.info(&inst);
+    let info = info_factory.info(inst);
     let mut used_regs = Vec::new();
     for i in 0..inst.op_count() {
         if inst.op_kind(i) != OpKind::Register {
@@ -26,7 +26,7 @@ pub fn apply_rs_transform(
         }
     }
 
-    if used_regs.len() == 0 {
+    if used_regs.is_empty() {
         return Err(DeoptimizerError::TransformNotPossible);
     }
     let swap_reg = *used_regs.choose(&mut rand::thread_rng()).unwrap();
@@ -45,12 +45,12 @@ pub fn apply_rs_transform(
         swap_reg.size() * 8
     ));
     let xchg = Instruction::with2(xchg_code, swap_reg, rand_reg)?;
-    Ok(rencode(bitness, [xchg, inst.clone(), xchg].to_vec(), rip)?)
+    Ok(rencode(bitness, [xchg, *inst, xchg].to_vec(), rip)?)
 }
 
 pub fn is_rs_compatible(inst: &Instruction) -> bool {
     let mut info_factory = InstructionInfoFactory::new();
-    let info = info_factory.info(&inst);
+    let info = info_factory.info(inst);
     for r in info.used_registers() {
         if r.register().full_register() == Register::RSP {
             return false;
