@@ -1,3 +1,5 @@
+use std::u64;
+
 use crate::x86_64::helpers::*;
 use crate::x86_64::DeoptimizerError;
 use iced_x86::*;
@@ -26,7 +28,7 @@ pub fn apply_om_transform(
     let old_mem_disp_sign = mem_disp as i32 > 0; // The sign of the memory displacement
     let abs_old_mem_disp = match old_mem_disp_sign {
         true => mem_disp,
-        false => (mem_disp as i32).abs() as u64,
+        false => (mem_disp as i32).unsigned_abs() as u64,
     };
     let (c1, c2) = match new_mem_disp_sign {
         true => (
@@ -42,14 +44,14 @@ pub fn apply_om_transform(
     let fix_val = match (new_mem_disp_sign, old_mem_disp_sign) {
         (true, true) => mem_disp.abs_diff(rand_val),
         (false, false) => match base_reg.size() {
-            1 => ((rand_val as i8).abs() as u64).abs_diff(abs_old_mem_disp),
-            2 => ((rand_val as i16).abs() as u64).abs_diff(abs_old_mem_disp),
-            _ => ((rand_val as i32).abs() as u64).abs_diff(abs_old_mem_disp),
+            1 => ((rand_val as i8).unsigned_abs() as u64).abs_diff(abs_old_mem_disp),
+            2 => ((rand_val as i16).unsigned_abs() as u64).abs_diff(abs_old_mem_disp),
+            _ => ((rand_val as i32).unsigned_abs() as u64).abs_diff(abs_old_mem_disp),
         },
         (true, false) | (false, true) => match base_reg.size() {
-            1 => ((rand_val as i8).abs() as u64) + abs_old_mem_disp,
-            2 => ((rand_val as i16).abs() as u64) + abs_old_mem_disp,
-            _ => ((rand_val as i32).abs() as u64) + abs_old_mem_disp,
+            1 => ((rand_val as i8).unsigned_abs() as u64) + abs_old_mem_disp,
+            2 => ((rand_val as i16).unsigned_abs() as u64) + abs_old_mem_disp,
+            _ => ((rand_val as i32).unsigned_abs() as u64) + abs_old_mem_disp,
         },
     };
 
@@ -60,7 +62,7 @@ pub fn apply_om_transform(
 
     inst.set_memory_displ_size(bitness / 8);
     inst.set_memory_displacement64(rand_val);
-    let mut result = [pre_inst, inst.clone()].to_vec();
+    let mut result = [pre_inst, *inst].to_vec();
     if base_reg.full_register() != inst.op0_register().full_register() {
         result.push(post_inst);
     }
@@ -71,7 +73,7 @@ pub fn apply_om_transform(
 pub fn is_om_compatible(inst: &Instruction) -> bool {
     let base_reg = inst.memory_base();
     let mut info_factory = InstructionInfoFactory::new();
-    let info = info_factory.info(&inst);
+    let info = info_factory.info(inst);
     if !matches!(
         inst.mnemonic(),
         Mnemonic::Mov | Mnemonic::Movzx | Mnemonic::Movd | Mnemonic::Movq | Mnemonic::Lea

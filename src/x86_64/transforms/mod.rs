@@ -7,7 +7,7 @@ mod offset_mutation;
 mod register_swap;
 pub use arithmetic_partitioning::*;
 pub use condition_expand::*;
-pub use immediate_to_register::*;
+// pub use immediate_to_register::*;
 pub use logical_inverse::*;
 pub use logical_partitioning::*;
 pub use offset_mutation::*;

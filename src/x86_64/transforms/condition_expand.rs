@@ -24,9 +24,9 @@ pub fn apply_ce_transform(
 
     if inst.is_loopcc() || inst.is_loop() {
         let mut dec = match bitness {
-            16 => Instruction::with2(Code::Dec_r16, Register::CX, Register::CX)?,
-            32 => Instruction::with2(Code::Dec_r32, Register::ECX, Register::ECX)?,
-            64 => Instruction::with2(Code::Dec_rm64, Register::RCX, Register::RCX)?,
+            16 => Instruction::with1(Code::Dec_r16, Register::CX)?,
+            32 => Instruction::with1(Code::Dec_r32, Register::ECX)?,
+            64 => Instruction::with1(Code::Dec_rm64, Register::RCX)?,
             _ => return Err(DeoptimizerError::InvalidProcessorMode),
         };
         dec = *rencode(bitness, [dec].to_vec(), inst.ip())?
@@ -36,7 +36,7 @@ pub fn apply_ce_transform(
             Mnemonic::Loop | Mnemonic::Loope => {
                 asm.jnz(bt)?;
                 let insts = asm.instructions();
-                let mut jnz = insts.first().unwrap().clone();
+                let mut jnz = *insts.first().unwrap();
                 jnz.set_ip(dec.next_ip());
                 jnz.as_near_branch();
                 if inst.mnemonic() == Mnemonic::Loope {
@@ -48,7 +48,7 @@ pub fn apply_ce_transform(
             Mnemonic::Loopne => {
                 asm.jz(bt)?;
                 let insts = asm.instructions();
-                let mut jz = insts.first().unwrap().clone();
+                let mut jz = *insts.first().unwrap();
                 jz.set_ip(dec.next_ip());
                 jz.as_near_branch();
                 return Ok(rencode(bitness, [dec, jz].to_vec(), inst.ip())?);
@@ -63,7 +63,7 @@ pub fn apply_ce_transform(
     ) {
         asm.jz(bt)?;
         let insts = asm.instructions();
-        let mut jz = insts.first().unwrap().clone();
+        let mut jz = *insts.first().unwrap();
         jz.set_ip(test.next_ip());
         jz.as_near_branch();
         return Ok(rencode(bitness, [test, jz].to_vec(), inst.ip())?);

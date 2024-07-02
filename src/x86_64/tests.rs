@@ -525,65 +525,65 @@ mod tests {
         println!("Legacy: {}", total - (vex + xop));
     }
 
-    #[test]
-    fn temp() {
-        let code_64: &[u8] = &[
-            0x48, 0x8b, 0x00, 0x48, 0x8b, 0x40, 0x10, 0x48, 0x8b, 0x40, 0xf0, 0x48, 0x8d, 0x09,
-            0x89, 0x38, 0x48, 0x8b, 0x4b, 0x28, 0x48, 0x89, 0x74, 0x24, 0x10, 0xc7, 0x45, 0x40,
-            0x01, 0x00, 0x00, 0x00, 0x48, 0x89, 0x54, 0xc8, 0x28, 0x48, 0x8d, 0x0c, 0xc9, 0x41,
-            0x0f, 0xb6, 0xb4, 0x80, 0x53, 0xb3, 0x0f, 0x00, 0x48, 0x81, 0x23, 0xff, 0x9f, 0xff,
-            0xff, 0x48, 0x0f, 0xba, 0x2b, 0x0e,
-        ];
-        let code_32: &[u8] = &[
-            0x68, 0xaa, 0x00, 0x00, 0x00, 0x68, 0xbb, 0xaa, 0x00, 0x00, 0x68, 0xdd, 0xcc, 0xbb,
-            0xaa, 0x68, 0xff, 0xee, 0xdd, 0xcc, 0x68, 0xff, 0xff, 0x00, 0x00, 0x6a, 0xff, 0x6a,
-            0xff,
-        ];
-        let mut decoder64 = Decoder::new(64, code_32, DecoderOptions::NONE);
-        let mut decoder32 = Decoder::new(32, code_32, DecoderOptions::NONE);
-        let mut inst = Instruction::default();
-        let mut offset = 0;
-
-        fn convert_to_byte_value_instructions(
-            bitness: u32,
-            bytes: &[u8],
-            rip: u64,
-        ) -> Result<Vec<Instruction>, DeoptimizerError> {
-            let mut result = Vec::new();
-            // let bytes = get_instruction_bytes(bitness, [inst].to_vec())?;
-            for b in bytes.iter() {
-                result.push(Instruction::with_declare_byte_1(*b));
-            }
-            Ok(rencode(bitness, result, rip)?)
-        }
-
-        while decoder64.can_decode() {
-            decoder64.decode_out(&mut inst);
-            let mut dbs = convert_to_byte_value_instructions(
-                64,
-                &code_64[offset as usize..offset as usize + inst.len()],
-                inst.ip(),
-            )
-            .expect("db convertion failed");
-            // let disp_size = inst.memory_displ_size();
-            // let mem_disp = inst.memory_displacement64();
-            for i in dbs.iter_mut() {
-                println!("[i] {} -> {:?} - ({:?})", i, i.code(), i.mnemonic());
-                i.set_code(Code::DeclareByte);
-                println!(">> {} -> {:?} - {:?}", i, i.code(), i.mnemonic());
-            }
-
-            offset += inst.len();
-            // println!("\t--> op1_kind: {:?}", inst.op0_kind());
-            // println!("\t--> mem_disp: {}", mem_disp);
-            // println!("\t--> mem_disp_size: {}", disp_size);
-            // println!(
-            // "\t--> mem_disp_sign: {}",
-            // mem_disp < u64::pow(2, disp_size * 8) / 2
-            // );
-        }
-
-        println!("i32 MIN: {}", i32::MIN);
-        println!("i32 MAX: {}", i32::MAX);
-    }
+    // #[test]
+    // fn temp() {
+    //     let code_64: &[u8] = &[
+    //         0x48, 0x8b, 0x00, 0x48, 0x8b, 0x40, 0x10, 0x48, 0x8b, 0x40, 0xf0, 0x48, 0x8d, 0x09,
+    //         0x89, 0x38, 0x48, 0x8b, 0x4b, 0x28, 0x48, 0x89, 0x74, 0x24, 0x10, 0xc7, 0x45, 0x40,
+    //         0x01, 0x00, 0x00, 0x00, 0x48, 0x89, 0x54, 0xc8, 0x28, 0x48, 0x8d, 0x0c, 0xc9, 0x41,
+    //         0x0f, 0xb6, 0xb4, 0x80, 0x53, 0xb3, 0x0f, 0x00, 0x48, 0x81, 0x23, 0xff, 0x9f, 0xff,
+    //         0xff, 0x48, 0x0f, 0xba, 0x2b, 0x0e,
+    //     ];
+    //     let code_32: &[u8] = &[
+    //         0x68, 0xaa, 0x00, 0x00, 0x00, 0x68, 0xbb, 0xaa, 0x00, 0x00, 0x68, 0xdd, 0xcc, 0xbb,
+    //         0xaa, 0x68, 0xff, 0xee, 0xdd, 0xcc, 0x68, 0xff, 0xff, 0x00, 0x00, 0x6a, 0xff, 0x6a,
+    //         0xff,
+    //     ];
+    //     let mut decoder64 = Decoder::new(64, code_32, DecoderOptions::NONE);
+    //     let decoder32 = Decoder::new(32, code_32, DecoderOptions::NONE);
+    //     let mut inst = Instruction::default();
+    //     let mut offset = 0;
+    //
+    //     fn convert_to_byte_value_instructions(
+    //         bitness: u32,
+    //         bytes: &[u8],
+    //         rip: u64,
+    //     ) -> Result<Vec<Instruction>, DeoptimizerError> {
+    //         let mut result = Vec::new();
+    //         // let bytes = get_instruction_bytes(bitness, [inst].to_vec())?;
+    //         for b in bytes.iter() {
+    //             result.push(Instruction::with_declare_byte_1(*b));
+    //         }
+    //         Ok(rencode(bitness, result, rip)?)
+    //     }
+    //
+    //     while decoder64.can_decode() {
+    //         decoder64.decode_out(&mut inst);
+    //         let mut dbs = convert_to_byte_value_instructions(
+    //             64,
+    //             &code_64[offset as usize..offset as usize + inst.len()],
+    //             inst.ip(),
+    //         )
+    //         .expect("db convertion failed");
+    //         // let disp_size = inst.memory_displ_size();
+    //         // let mem_disp = inst.memory_displacement64();
+    //         for i in dbs.iter_mut() {
+    //             println!("[i] {} -> {:?} - ({:?})", i, i.code(), i.mnemonic());
+    //             i.set_code(Code::DeclareByte);
+    //             println!(">> {} -> {:?} - {:?}", i, i.code(), i.mnemonic());
+    //         }
+    //
+    //         offset += inst.len();
+    //         // println!("\t--> op1_kind: {:?}", inst.op0_kind());
+    //         // println!("\t--> mem_disp: {}", mem_disp);
+    //         // println!("\t--> mem_disp_size: {}", disp_size);
+    //         // println!(
+    //         // "\t--> mem_disp_sign: {}",
+    //         // mem_disp < u64::pow(2, disp_size * 8) / 2
+    //         // );
+    //     }
+    //
+    //     println!("i32 MIN: {}", i32::MIN);
+    //     println!("i32 MAX: {}", i32::MAX);
+    // }
 }

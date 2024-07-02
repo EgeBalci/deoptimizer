@@ -26,7 +26,7 @@ pub fn apply_lp_transform(
                 // This is simple x2 or /2
                 match mnemonic {
                     Mnemonic::Shr | Mnemonic::Sar => {
-                        let mut and = inst.clone();
+                        let mut and = *inst;
                         let mut op1_size = op0_size * 8;
                         if op1_size == 64 {
                             op1_size = 32;
@@ -90,20 +90,18 @@ pub fn apply_lp_transform(
                     }
                     _ => return Err(DeoptimizerError::TransformNotPossible),
                 }
+            } else if imm.is_power_of_two() {
+                let mut shift1 = *inst;
+                let mut shift2 = *inst;
+                shift1.set_immediate8(imm as u8 / 2);
+                shift2.set_immediate8(imm as u8 / 2);
+                [shift1, shift2].to_vec()
             } else {
-                if imm.is_power_of_two() {
-                    let mut shift1 = inst.clone();
-                    let mut shift2 = inst.clone();
-                    shift1.set_immediate8(imm as u8 / 2);
-                    shift2.set_immediate8(imm as u8 / 2);
-                    [shift1, shift2].to_vec()
-                } else {
-                    let mut shift1 = inst.clone();
-                    let mut shift2 = inst.clone();
-                    shift1.set_immediate8(((imm - 1) as u8 / 2) + 1);
-                    shift2.set_immediate8((imm - 1) as u8 / 2);
-                    [shift1, shift2].to_vec()
-                }
+                let mut shift1 = *inst;
+                let mut shift2 = *inst;
+                shift1.set_immediate8(((imm - 1) as u8 / 2) + 1);
+                shift2.set_immediate8((imm - 1) as u8 / 2);
+                [shift1, shift2].to_vec()
             }
         }
         Mnemonic::Ror | Mnemonic::Rcr | Mnemonic::Rol | Mnemonic::Rcl => {
@@ -112,7 +110,7 @@ pub fn apply_lp_transform(
                 OpKind::Register => (inst.op0_register().size() * 8) as u64,
                 _ => return Err(DeoptimizerError::InvalidTemplate),
             };
-            imm = imm % dst_op_size;
+            imm %= dst_op_size;
             let pow = rand::thread_rng().gen_range(2..(u8::MAX as u64 / dst_op_size) as u8);
             inst.set_immediate8((dst_op_size * pow as u64 + imm) as u8);
             [*inst].to_vec()

@@ -2,8 +2,8 @@
 name = "deoptimizer"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
-license-file = "LICENSE"
+license = "MIT"
+# license-file = "LICENSE"
 readme = "README.md"
 repository = "https://github.com/EgeBalci/deoptimizer"
 authors = ["Ege BALCI <egebalci@pm.me>"]
