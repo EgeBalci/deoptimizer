@@ -5,6 +5,7 @@ use colored::Colorize;
 use hex::FromHexError;
 use log::error;
 use std::fs;
+use std::num::ParseIntError;
 use std::process;
 use thiserror::Error;
 
@@ -18,6 +19,8 @@ pub enum ArgParseError {
     InvalidOffsetValues,
     #[error("Address parsing failed: {0}")]
     AddressParseError(#[from] FromHexError),
+    #[error("Integer parsing failed: {0}")]
+    IntegerParseError(#[from] ParseIntError),
     #[error("IO Error: {0}")]
     IoError(#[from] std::io::Error),
 }
@@ -57,8 +60,8 @@ pub struct Options {
     pub addr: String,
 
     /// File offset range for skipping deoptimization (eg: 0-10 for skipping first ten bytes).
-    #[arg(long, value_parser, num_args = 1.., value_delimiter = '-')]
-    pub skip_offsets: Vec<u32>,
+    #[arg(long, value_parser=parse_offset, num_args = 1.., value_delimiter = ',')]
+    pub skip_offsets: Vec<(u32, u32)>,
 
     /// total number of deoptimization cycles.
     #[arg(long, short = 'c', default_value_t = 1)]
@@ -107,20 +110,6 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
         opts.outfile = format!("{}_deopt.bin", opts.file);
     }
 
-    if opts.skip_offsets.len() > 0 {
-        if opts.skip_offsets.len() % 2 != 0 {
-            return Err(ArgParseError::InvalidOffsetValues);
-        }
-
-        let mut i = 0;
-        while i < opts.skip_offsets.len() - 1 {
-            if opts.skip_offsets[i] >= opts.skip_offsets[i + 1] {
-                return Err(ArgParseError::InvalidOffsetValues);
-            }
-            i += 2;
-        }
-    }
-
     if opts.verbose {
         log::set_max_level(log::LevelFilter::Debug);
     }
@@ -128,6 +117,24 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
         log::set_max_level(log::LevelFilter::Trace);
     }
     Ok(opts)
+}
+
+pub fn parse_offset(offsets: &str) -> Result<(u32, u32), ArgParseError> {
+    if offsets.matches("-").count() != 1 {
+        return Err(ArgParseError::InvalidOffsetValues);
+    }
+    let mut off: Vec<u32> = Vec::new();
+    for part in offsets.split("-") {
+        if part.starts_with("0x") {
+            off.push(u32::from_str_radix(part.trim_start_matches("0x"), 16)?)
+        } else {
+            off.push(part.parse()?)
+        }
+    }
+    if off[0] > off[1] {
+        return Err(ArgParseError::InvalidOffsetValues);
+    }
+    Ok((off[0], off[1]))
 }
 
 pub fn print_summary(opts: &Options) {

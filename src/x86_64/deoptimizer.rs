@@ -181,15 +181,9 @@ impl Deoptimizer {
         Ok(())
     }
 
-    pub fn set_skipped_offsets(&mut self, skipped: Vec<u32>) {
+    pub fn set_skipped_offsets(&mut self, skipped: Vec<(u32, u32)>) {
         if skipped.len() > 0 {
-            let mut offsets = Vec::new();
-            let mut i = 0;
-            while i < skipped.len() {
-                offsets.push((skipped[i], skipped[i + 1]));
-                i += 2;
-            }
-            self.skipped_offsets = Some(offsets);
+            self.skipped_offsets = Some(skipped);
         }
     }
 
