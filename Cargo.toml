@@ -25,6 +25,7 @@ hexdump = "0.1.1"
 iced-x86 = { version = "1.20.0", features = ["code_asm"] }
 log = "0.4.20"
 rand = "0.8.5"
+regex = "1.10.5"
 thiserror = "1.0.50"
 
 # [profile.release]

@@ -86,7 +86,6 @@ pub struct AnalyzedCode {
     known_addr_table: Vec<u64>,
     branch_targets: Vec<u64>,
     // addr_map: HashMap<u64, Instruction>,
-    // cfe_addr_table: Vec<u64>,
 }
 
 impl AnalyzedCode {
@@ -230,6 +229,8 @@ impl Deoptimizer {
             bitness
         );
 
+        // let trace_results = tracer::trace(bytes, bitness, start_addr)?;
+
         let mut decoder = Decoder::with_ip(bitness, bytes, start_addr, DecoderOptions::NONE);
         let replaced_bytes: Vec<u8>;
         if self.skipped_offsets.is_some() {
@@ -240,7 +241,6 @@ impl Deoptimizer {
         let mut inst = Instruction::default();
         let mut known_addr_table = Vec::new();
         let mut branch_targets = Vec::new();
-        let mut cfe_addr_table = Vec::new();
         let mut code = Vec::new();
         let mut addr_map: HashMap<u64, Instruction> = HashMap::new();
         let mut offset = 0;
@@ -273,13 +273,13 @@ impl Deoptimizer {
                 branch_targets.push(bt);
             }
 
-            // Push to control flow exit address table if it is a JMP of RET
-            if inst.mnemonic() == Mnemonic::Ret
-                || inst.mnemonic() == Mnemonic::Retf
-                || inst.mnemonic() == Mnemonic::Jmp
-            {
-                cfe_addr_table.push(inst.ip())
-            }
+            // // Push to control flow exit address table if it is a JMP of RET
+            // if inst.mnemonic() == Mnemonic::Ret
+            //     || inst.mnemonic() == Mnemonic::Retf
+            //     || inst.mnemonic() == Mnemonic::Jmp
+            // {
+            //     cfe_addr_table.push(inst.ip())
+            // }
             offset += inst.len() as u32;
         }
 
@@ -299,7 +299,6 @@ impl Deoptimizer {
             code,
             known_addr_table,
             branch_targets,
-            // cfe_addr_table,
             // addr_map,
         })
     }
