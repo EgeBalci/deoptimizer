@@ -2,10 +2,11 @@ use crate::x86_64::*;
 use bitflags::bitflags;
 use iced_x86::code_asm::*;
 use iced_x86::*;
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use rand::Rng;
 use std::collections::HashMap;
 use thiserror::Error;
+use tracer::*;
 
 #[derive(Error, Debug)]
 pub enum DeoptimizerError {
@@ -21,8 +22,6 @@ pub enum DeoptimizerError {
     // UnexpectedMemorySize,
     // #[error("Offset skipping failed!")]
     // OffsetSkipFail,
-    #[error("Invalid formatter syntax.")]
-    InvalidSyntax,
     #[error("Invalid processor mode(bitness). (16/32/64 accepted)")]
     InvalidProcessorMode,
     #[error("All available instruction transform gadgets failed.")]
@@ -47,16 +46,18 @@ pub enum DeoptimizerError {
     TransposeFailed,
     #[error("Invalid transform gadget.")]
     InvalidTransformGadget,
+    #[error("Tracer Error: {0}")]
+    TracerError(#[from] TracerError),
     #[error("Instruction encoding failed: {0}")]
     EncodingFail(#[from] IcedError),
 }
 
-enum AssemblySyntax {
-    Keystone,
-    Nasm,
-    Masm,
-    Intel,
-    Gas,
+#[allow(dead_code)]
+pub enum FileType {
+    Pe,
+    Elf,
+    Coff,
+    Shellcode,
 }
 
 bitflags! {
@@ -78,26 +79,38 @@ impl AvailableTransforms {
     }
 }
 
+#[allow(dead_code)]
 pub struct AnalyzedCode {
-    bitness: u32,
     bytes: Vec<u8>,
+    bitness: u32,
     start_addr: u64,
-    code: Vec<Instruction>,
+    file_type: FileType,
+    instructions: Vec<Instruction>,
     known_addr_table: Vec<u64>,
     branch_targets: Vec<u64>,
-    // addr_map: HashMap<u64, Instruction>,
+    trace_results: Option<TraceResults>,
 }
 
 impl AnalyzedCode {
-    fn is_known_address(&self, addr: u64) -> bool {
+    // pub fn get_bytes(&self) -> Vec<u8> {
+    //     self.bytes
+    // }
+    // pub fn get_instructions(&self) -> Vec<Instruction> {
+    //     self.instructions
+    // }
+    // pub fn get_bitness(&self) -> u32 {
+    //     self.bitness
+    // }
+    // pub fn get_start_address(&self) -> u64 {
+    //     self.start_addr
+    // }
+    pub fn is_known_address(&self, addr: u64) -> bool {
         self.known_addr_table.contains(&addr)
     }
-    fn is_branch_target(&self, addr: u64) -> bool {
+    pub fn is_branch_target(&self, addr: u64) -> bool {
         self.branch_targets.contains(&addr)
     }
-    // fn get_random_cfe_addr(&self) -> Option<u64> {
-    //     self.cfe_addr_table.choose(&mut rand::thread_rng()).copied()
-    // }
+
     // pub fn is_affecting_cf(&self, inst: &Instruction) -> Result<bool, DeoptimizerError> {
     //     // Check if the instruction exists in self.code
     //     if self.addr_map.get(&inst.ip()).is_none() {
@@ -135,9 +148,9 @@ pub struct Deoptimizer {
     pub transforms: AvailableTransforms,
     /// Allow processing of invalid instructions.
     pub allow_invalid: bool,
-    /// Disassembler syntax.
-    syntax: AssemblySyntax,
-    skipped_offsets: Option<Vec<(u32, u32)>>,
+    /// Trace the control flow of the given binary
+    pub trace: bool,
+    skipped_offsets: HashMap<u64, bool>,
 }
 
 impl Deoptimizer {
@@ -145,10 +158,10 @@ impl Deoptimizer {
         Self {
             cycle: 1,
             freq: 0.5,
+            trace: false,
             allow_invalid: false,
             transforms: AvailableTransforms::All,
-            syntax: AssemblySyntax::Nasm,
-            skipped_offsets: None,
+            skipped_offsets: HashMap::new(),
         }
     }
 
@@ -169,32 +182,13 @@ impl Deoptimizer {
         Ok(())
     }
 
-    pub fn set_syntax(&mut self, syntax: String) -> Result<(), DeoptimizerError> {
-        match syntax.to_lowercase().as_str() {
-            "keystone" => self.syntax = AssemblySyntax::Keystone,
-            "nasm" => self.syntax = AssemblySyntax::Nasm,
-            "masm" => self.syntax = AssemblySyntax::Masm,
-            "intel" => self.syntax = AssemblySyntax::Intel,
-            "gas" => self.syntax = AssemblySyntax::Gas,
-            _ => return Err(DeoptimizerError::InvalidSyntax),
-        }
-        Ok(())
-    }
-
-    pub fn set_skipped_offsets(&mut self, skipped: Vec<(u32, u32)>) {
-        self.skipped_offsets = Some(skipped);
-    }
-
-    fn is_offset_skipped(&self, offset: u32) -> bool {
-        if self.skipped_offsets.is_none() {
-            return false;
-        }
-        for (o1, o2) in self.skipped_offsets.clone().unwrap() {
-            if offset >= o1 && offset <= o2 {
-                return true;
+    pub fn set_skipped_offsets(&mut self, skipped: Vec<(u64, u64)>) {
+        for range in skipped {
+            let (o1, o2) = range;
+            for o in o1..o2 {
+                self.skipped_offsets.insert(o, true);
             }
         }
-        false
     }
 
     fn replace_skipped_offsets(
@@ -202,13 +196,13 @@ impl Deoptimizer {
         bytes: &[u8],
         fill: u8,
     ) -> Result<Vec<u8>, DeoptimizerError> {
-        if self.skipped_offsets.is_none() {
+        if self.skipped_offsets.is_empty() {
             return Ok(bytes.to_vec());
         }
         let mut replaced_bytes = Vec::new();
         trace!("Replacing skipped offsets with NOPs...");
         for (i, b) in bytes.iter().enumerate() {
-            if self.is_offset_skipped(i as u32) {
+            if self.skipped_offsets.contains_key(&(i as u64)) {
                 replaced_bytes.push(fill);
                 continue;
             }
@@ -229,11 +223,30 @@ impl Deoptimizer {
             bitness
         );
 
-        // let trace_results = tracer::trace(bytes, bitness, start_addr)?;
+        // Determine the file type here...
+        if bytes.len() > 1000 && self.trace {
+            warn!("Given shellcode seems to be too large for effective tracing.")
+        }
+
+        let mut trace_results = None;
+        if self.trace {
+            info!("Tracing the execution control flow...");
+            let tr = tracer::trace(bytes, bitness, start_addr)?;
+            info!("Done tracing!");
+            info!("Found {} possible strings.", tr.possible_strings.len());
+            debug!("Total coverage: {}", tr.total_coverage);
+            debug!("Coverage without strings: {}", tr.coverage_whitout_strings);
+            for o in 0..bytes.len() {
+                if !tr.active_offsets.contains(&(o as u64 + start_addr)) {
+                    self.skipped_offsets.insert(o as u64 + start_addr, true);
+                }
+            }
+            trace_results = Some(tr);
+        }
 
         let mut decoder = Decoder::with_ip(bitness, bytes, start_addr, DecoderOptions::NONE);
         let replaced_bytes: Vec<u8>;
-        if self.skipped_offsets.is_some() {
+        if !self.skipped_offsets.is_empty() {
             replaced_bytes = self.replace_skipped_offsets(bytes, 0x90)?;
             decoder = Decoder::with_ip(bitness, &replaced_bytes, start_addr, DecoderOptions::NONE);
         }
@@ -241,22 +254,23 @@ impl Deoptimizer {
         let mut inst = Instruction::default();
         let mut known_addr_table = Vec::new();
         let mut branch_targets = Vec::new();
-        let mut code = Vec::new();
+        let mut instructions = Vec::new();
         let mut addr_map: HashMap<u64, Instruction> = HashMap::new();
         let mut offset = 0;
         while decoder.can_decode() {
             decoder.decode_out(&mut inst);
-            if self.is_offset_skipped(offset) {
+            if self.skipped_offsets.contains_key(&offset) {
                 let mut db = Instruction::with_declare_byte_1(bytes[offset as usize]);
                 db.set_ip(inst.ip());
                 db.set_code(Code::DeclareByte);
                 // Push to known address table
                 known_addr_table.push(db.ip());
                 addr_map.insert(db.ip(), db);
-                code.push(db);
+                instructions.push(db);
                 offset += 1;
                 continue;
             }
+
             if inst.is_invalid() {
                 warn!("Found invalid instruction at: 0x{:016X}", inst.ip());
                 if !self.allow_invalid {
@@ -266,21 +280,13 @@ impl Deoptimizer {
             // Push to known address table
             known_addr_table.push(inst.ip());
             addr_map.insert(inst.ip(), inst);
-            code.push(inst);
+            instructions.push(inst);
 
             let bt = get_branch_target(&inst).unwrap_or(0);
             if bt != 0 {
                 branch_targets.push(bt);
             }
-
-            // // Push to control flow exit address table if it is a JMP of RET
-            // if inst.mnemonic() == Mnemonic::Ret
-            //     || inst.mnemonic() == Mnemonic::Retf
-            //     || inst.mnemonic() == Mnemonic::Jmp
-            // {
-            //     cfe_addr_table.push(inst.ip())
-            // }
-            offset += inst.len() as u32;
+            offset += inst.len() as u64;
         }
 
         for bt in branch_targets.iter() {
@@ -296,90 +302,12 @@ impl Deoptimizer {
             bitness,
             bytes: bytes.to_vec(),
             start_addr,
-            code,
+            file_type: FileType::Shellcode,
+            instructions,
             known_addr_table,
             branch_targets,
-            // addr_map,
+            trace_results,
         })
-    }
-
-    pub fn format_instruction(&self, inst: &Instruction) -> String {
-        let mut result = String::new();
-        match self.syntax {
-            AssemblySyntax::Keystone => {
-                let mut formatter = IntelFormatter::new();
-                formatter.options_mut().set_uppercase_keywords(false);
-                formatter
-                    .options_mut()
-                    .set_memory_size_options(iced_x86::MemorySizeOptions::Always);
-                formatter.options_mut().set_hex_prefix("0x");
-                formatter.options_mut().set_hex_suffix("");
-                formatter.format(inst, &mut result);
-            }
-            AssemblySyntax::Nasm => {
-                let mut formatter = NasmFormatter::new();
-                formatter.format(inst, &mut result);
-            }
-            AssemblySyntax::Masm => {
-                let mut formatter = MasmFormatter::new();
-                formatter.format(inst, &mut result);
-            }
-            AssemblySyntax::Intel => {
-                let mut formatter = IntelFormatter::new();
-                formatter.format(inst, &mut result);
-            }
-            AssemblySyntax::Gas => {
-                let mut formatter = GasFormatter::new();
-                formatter.format(inst, &mut result);
-            }
-        };
-        result
-    }
-
-    pub fn disassemble(
-        &mut self,
-        bitness: u32,
-        start_addr: u64,
-        bytes: Vec<u8>,
-    ) -> Result<String, DeoptimizerError> {
-        info!(
-            "Disassembling at -> 0x{:016X} (mode={})",
-            start_addr, bitness
-        );
-        let acode = self.analyze(bytes.as_slice(), bitness, start_addr)?;
-        let mut result = String::new();
-        let mut decoder = Decoder::new(acode.bitness, bytes.as_slice(), DecoderOptions::NONE);
-        let mut inst = Instruction::default();
-        while decoder.can_decode() {
-            decoder.decode_out(&mut inst);
-            if inst.is_invalid() {
-                warn!(
-                    "Inlining invalid instruction bytes at: 0x{:016X}",
-                    inst.ip()
-                );
-                let start_index = (inst.ip() - acode.start_addr) as usize;
-                let instr_bytes = &acode.bytes[start_index..start_index + inst.len()];
-                result += &format!("loc_{:016X}: {}\n", inst.ip(), to_db_mnemonic(instr_bytes));
-                continue;
-            }
-            let temp = self.format_instruction(&inst);
-            let nbt = inst.near_branch_target();
-            if nbt != 0 {
-                if acode.is_known_address(nbt) {
-                    result += &format!(
-                        "loc_{:016X}: {} {}\n",
-                        inst.ip(),
-                        temp.split(' ').next().unwrap(),
-                        &format!("loc_{:016X}", nbt)
-                    );
-                    continue;
-                } else {
-                    warn!("Misaligned instruction detected at {}", inst.ip())
-                }
-            }
-            result += &format!("loc_{:016X}: {}\n", inst.ip(), temp);
-        }
-        Ok(result)
     }
 
     pub fn apply_transform(
@@ -455,7 +383,7 @@ impl Deoptimizer {
         let mut ip_to_index_table: HashMap<u64, usize> = HashMap::new();
         let mut index_to_index_table: HashMap<usize, usize> = HashMap::new();
         // let mut new_ip: u64 = acode.start_addr;
-        for inst in acode.code.clone() {
+        for inst in acode.instructions.clone() {
             if acode.is_branch_target(inst.ip()) {
                 ip_to_index_table.insert(inst.ip(), result.len());
             }

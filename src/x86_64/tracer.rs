@@ -1,51 +1,15 @@
 use crate::x86_64::*;
 use iced_x86::code_asm::*;
 use iced_x86::*;
-use log::{error, info, trace, warn};
+use log::{error, trace};
 use regex::bytes::Regex;
 use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TracerError {
-    // #[error("Instruction with unexpected operand count.")]
-    // UnexpectedOperandCount,
-    // #[error("Given instruction not found in code map.")]
-    // InstructionNotFound,
-    // #[error("Code analysis results are not found.")]
-    // MissingCodeAnalysis,
-    // #[error("Near branch value too large.")]
-    // NearBranchTooBig,
-    // #[error("Unexpected memory size given.")]
-    // UnexpectedMemorySize,
-    // #[error("Offset skipping failed!")]
-    // OffsetSkipFail,
-    #[error("Unknown stack operation.")]
-    UnknownStackOp,
-    #[error("Invalid formatter syntax.")]
-    InvalidSyntax,
-    #[error("Invalid processor mode(bitness). (16/32/64 accepted)")]
-    InvalidProcessorMode,
-    #[error("All available instruction transform gadgets failed.")]
-    AllTransformsFailed,
-    #[error("Far branch value too large.")]
-    FarBranchTooBig,
-    #[error("Found invalid instruction.")]
-    InvalidInstruction,
-    #[error("Branch target not found.")]
-    BracnhTargetNotFound,
-    #[error("This transform not possible for given instruction.")]
-    TransformNotPossible,
-    #[error("Unexpected register size given.")]
-    UnexpectedRegisterSize,
     #[error("Unexpected operand type encountered.")]
     UnexpectedOperandType,
-    #[error("No GP register found with given parameters.")]
-    RegisterNotFound,
-    #[error("Instruction transpose attempt failed.")]
-    TransposeFailed,
-    #[error("Invalid transform gadget.")]
-    InvalidTransformGadget,
     #[error("Instruction encoding failed: {0}")]
     EncodingFail(#[from] IcedError),
 }
@@ -81,29 +45,29 @@ pub struct TraceResults {
     pub coverage_whitout_strings: f64,
 }
 
-impl TraceResults {
-    pub fn print_dead_code(&self) {
-        let mut last = 0;
-        for (i, b) in self.bytes.iter().enumerate() {
-            if self.active_offsets.contains(&(i as u64)) {
-                continue;
-            }
-            if i - last != 1 {
-                print!("\n0x{:016X}:\t", i);
-            }
-
-            if *b >= 0x20 && *b <= 0x7E {
-                print!("{}", String::from_utf8_lossy(&[*b]));
-            } else if *b == 0x00 {
-                continue;
-            } else {
-                print!("\\x{:X}", b);
-            }
-            last = i
-        }
-        println!("\n");
-    }
-}
+// impl TraceResults {
+//     pub fn print_dead_code(&self) {
+//         let mut last = 0;
+//         for (i, b) in self.bytes.iter().enumerate() {
+//             if self.active_offsets.contains(&(i as u64)) {
+//                 continue;
+//             }
+//             if i - last != 1 {
+//                 print!("\n0x{:016X}:\t", i);
+//             }
+//
+//             if *b >= 0x20 && *b <= 0x7E {
+//                 print!("{}", String::from_utf8_lossy(&[*b]));
+//             } else if *b == 0x00 {
+//                 continue;
+//             } else {
+//                 print!("\\x{:X}", b);
+//             }
+//             last = i
+//         }
+//         println!("\n");
+//     }
+// }
 
 impl Tracer {
     fn new(bytes: &[u8], bitness: u32) -> Self {
@@ -121,7 +85,7 @@ impl Tracer {
                 pso.push(o as u64);
             }
         }
-        info!("Found {} possible strings.", ps.len());
+        // info!("Found {} possible strings.", ps.len());
         Self {
             bytes: bytes.to_vec(),
             bitness,
@@ -141,7 +105,7 @@ impl Tracer {
     }
 
     fn trace_code_paths(&mut self, start_offset: u64) -> Result<HaltResason, TracerError> {
-        info!("[TRACER] Tracing -> 0x{:016X}", start_offset);
+        trace!("[TRACER] Tracing -> 0x{:016X}", start_offset);
         let mut ip = start_offset;
         loop {
             if ip >= self.bytes.len() as u64 {
@@ -293,32 +257,9 @@ fn is_conditional_branch(inst: Instruction) -> bool {
         || inst.is_loopcc()
 }
 
-// NO_BRANCH
-//  - Check if the stack is not empty
-//      - Check if current instruction is POP
-//      - Save poped address in current context with register
-//      - Pop the value from stack
-//  - Add to cf_addr_map
-//  - Add to active_offsets
-//  - Advance to next_ip
-// CONDITIONAL_BRANCH
-//  - Step-in
-//  - Advance to next_ip
-// ADDRESS_CALL
-//  - Push next_ip to stack
-//  - Step-in
-//  - Continue if HaltResason is Return
-// REGISTER_CALL
-//  - Check if current context contains the register value
-//      - Step-in
-//  - Halt->DynamicBranch
-//
-
 pub fn trace(bytes: &[u8], bitness: u32, start_addr: u64) -> Result<TraceResults, TracerError> {
     let mut tracer = Tracer::new(bytes, bitness);
-    info!("Tracing execution flow and possible code paths...");
     tracer.trace_code_paths(start_addr)?;
-    info!("Done tracing!");
     tracer.active_offsets.sort_unstable();
     tracer.active_offsets.dedup();
 

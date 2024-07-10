@@ -1,4 +1,5 @@
 mod deoptimizer;
+pub mod disassembler;
 mod helpers;
 mod tests;
 mod tracer;

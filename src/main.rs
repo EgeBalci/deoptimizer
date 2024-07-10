@@ -1,3 +1,5 @@
+// use crate::x86_64::disassembler;
+use crate::x86_64::disassembler::disassemble;
 use base64::prelude::*;
 use colored::Colorize;
 use log::{error, info, warn, LevelFilter};
@@ -53,13 +55,10 @@ fn main() {
     info!("Input file size: {}", file.len());
     let mut deopt = x86_64::Deoptimizer::new();
     deopt.freq = opts.freq;
+    deopt.trace = opts.trace;
     deopt.allow_invalid = opts.allow_invalid;
     deopt.set_skipped_offsets(opts.skip_offsets);
     if let Err(e) = deopt.set_transform_gadgets(opts.transforms) {
-        error!("{}", e);
-        return;
-    }
-    if let Err(e) = deopt.set_syntax(opts.syntax) {
         error!("{}", e);
         return;
     }
@@ -103,7 +102,7 @@ fn main() {
         }
         info!("De-optimized binary written into {}", opts.outfile);
     } else {
-        let source = match deopt.disassemble(opts.bitness, start_addr, output) {
+        let source = match disassemble(&output, opts.bitness, start_addr, opts.syntax) {
             Ok(s) => s,
             Err(e) => {
                 error!("{}", e);

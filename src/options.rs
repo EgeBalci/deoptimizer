@@ -17,6 +17,8 @@ pub enum ArgParseError {
     FileNotFound,
     #[error("Invalid offset values.")]
     InvalidOffsetValues,
+    #[error("Invalid formatter syntax.")]
+    InvalidSyntax,
     #[error("Address parsing failed: {0}")]
     AddressParseError(#[from] FromHexError),
     #[error("Integer parsing failed: {0}")]
@@ -35,55 +37,59 @@ pub struct Options {
     #[arg(long, short = 'a', default_value_t = String::from("x86"))]
     pub arch: String,
 
-    /// target binary file name.
+    /// Target binary file name.
     #[arg(long, short = 'f', default_value_t = String::new())]
     pub file: String,
 
-    /// output file name.
+    /// Output file name.
     #[arg(long, short = 'o', default_value_t = String::new())]
     pub outfile: String,
 
-    /// source assembly file.
+    /// Source assembly file.
     #[arg(long, short = 's', default_value_t = String::new())]
     pub source: String,
 
-    /// assembler formatter syntax (nasm/masm/intel/gas).
+    /// Assembler formatter syntax (nasm/masm/intel/gas).
     #[arg(long, default_value_t = String::from("keystone"))]
     pub syntax: String,
 
-    /// bitness of the binary file (16/32/64).
+    /// Bitness of the binary file (16/32/64).
     #[arg(long, short = 'b', default_value_t = 64)]
     pub bitness: u32,
 
-    /// start address in hexadecimal form.
+    /// Start address in hexadecimal form.
     #[arg(long, short = 'A', default_value_t = String::from("0x0000000000000000"))]
     pub addr: String,
 
     /// File offset range for skipping deoptimization (eg: 0-10 for skipping first ten bytes).
     #[arg(long, value_parser=parse_offset, num_args = 1.., value_delimiter = ',')]
-    pub skip_offsets: Vec<(u32, u32)>,
+    pub skip_offsets: Vec<(u64, u64)>,
 
-    /// total number of deoptimization cycles.
+    /// Auto-skip dead-code and strings by control flow tracing.
+    #[arg(long, short = 'T')]
+    pub trace: bool,
+
+    /// Total number of deoptimization cycles.
     #[arg(long, short = 'c', default_value_t = 1)]
     pub cycle: u32,
 
-    /// deoptimization frequency.
+    /// Deoptimization frequency.
     #[arg(long, short = 'F', default_value_t = 0.5)]
     pub freq: f32,
 
-    /// allowed transform routines (ap/li/lp/om/rs).
+    /// Allowed transform routines (ap/li/lp/om/rs).
     #[arg(long, default_value_t = String::from("ap,li,lp,om,rs"))]
     pub transforms: String,
 
-    /// allow processing of invalid instructions.
+    /// Allow processing of invalid instructions.
     #[arg(long)]
     pub allow_invalid: bool,
 
-    /// verbose output mode.
+    /// Verbose output mode.
     #[arg(long, short = 'v')]
     pub verbose: bool,
 
-    /// debug output mode.
+    /// Debug output mode.
     #[arg(long)]
     pub debug: bool,
 }
@@ -106,6 +112,13 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
         opts.outfile = opts.source.clone();
     }
 
+    if !matches!(
+        opts.syntax.to_uppercase().as_str(),
+        "KEYSTONE" | "NASM" | "MASM" | "INTEL" | "GAX"
+    ) {
+        return Err(ArgParseError::InvalidSyntax);
+    }
+
     if opts.outfile.is_empty() {
         opts.outfile = format!("{}_deopt.bin", opts.file);
     }
@@ -119,14 +132,14 @@ pub fn parse_options() -> Result<Options, ArgParseError> {
     Ok(opts)
 }
 
-pub fn parse_offset(offsets: &str) -> Result<(u32, u32), ArgParseError> {
+pub fn parse_offset(offsets: &str) -> Result<(u64, u64), ArgParseError> {
     if offsets.matches('-').count() != 1 {
         return Err(ArgParseError::InvalidOffsetValues);
     }
-    let mut off: Vec<u32> = Vec::new();
+    let mut off: Vec<u64> = Vec::new();
     for part in offsets.split('-') {
         if part.starts_with("0x") {
-            off.push(u32::from_str_radix(part.trim_start_matches("0x"), 16)?)
+            off.push(u64::from_str_radix(part.trim_start_matches("0x"), 16)?)
         } else {
             off.push(part.parse()?)
         }
@@ -147,6 +160,7 @@ pub fn print_summary(opts: &Options) {
     }
 
     let freq_str = format!("%{:.4}", opts.freq * 100.0);
+    let trace_str = format!("{:?}", opts.trace);
     println!(
         "\n[ {} {} {} ]",
         "#".repeat(wspace / 2 + 2).yellow().bold(),
@@ -200,6 +214,12 @@ pub fn print_summary(opts: &Options) {
         "Transforms:  ".blue().bold(),
         opts.transforms,
         " ".repeat(wspace - opts.transforms.len())
+    );
+    println!(
+        "[ {} {}{}]",
+        "Auto Trace:  ".blue().bold(),
+        opts.trace,
+        " ".repeat(wspace - trace_str.len())
     );
     println!();
 }
