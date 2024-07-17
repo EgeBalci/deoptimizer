@@ -51,10 +51,15 @@ pub fn apply_rs_transform(
 pub fn is_rs_compatible(inst: &Instruction) -> bool {
     let mut info_factory = InstructionInfoFactory::new();
     let info = info_factory.info(inst);
+    let mut used_full_regs = Vec::new();
     for r in info.used_registers() {
         if r.register().full_register() == Register::RSP {
             return false;
         }
+        if used_full_regs.contains(&r.register().full_register()) {
+            return false;
+        }
+        used_full_regs.push(r.register().full_register())
     }
 
     !(!inst
