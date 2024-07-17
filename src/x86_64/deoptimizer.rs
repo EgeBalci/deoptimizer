@@ -2,9 +2,9 @@ use crate::x86_64::*;
 use bitflags::bitflags;
 use iced_x86::code_asm::*;
 use iced_x86::*;
-use log::{debug, error, info, trace, warn};
+use log::{error, info, trace, warn};
 use rand::Rng;
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 use thiserror::Error;
 use tracer::*;
 
@@ -31,7 +31,7 @@ pub enum DeoptimizerError {
     #[error("Found invalid instruction.")]
     InvalidInstruction,
     #[error("Branch target not found.")]
-    BracnhTargetNotFound,
+    BranchTargetNotFound,
     #[error("This transform not possible for given instruction.")]
     TransformNotPossible,
     #[error("Unexpected register size given.")]
@@ -61,7 +61,7 @@ pub enum FileType {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug,PartialEq,Eq, Hash)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct AvailableTransforms: u8 {
         const None = 0;
         const ArithmeticPartitioning = 1;
@@ -86,57 +86,19 @@ pub struct AnalyzedCode {
     start_addr: u64,
     file_type: FileType,
     instructions: Vec<Instruction>,
-    known_addr_table: Vec<u64>,
-    branch_targets: Vec<u64>,
+    addr_map: HashMap<u64, Instruction>,
+    // known_addr_table: Vec<u64>,
+    branch_lookup_table: HashMap<u64, u64>,
     trace_results: Option<TraceResults>,
 }
 
 impl AnalyzedCode {
-    // pub fn get_bytes(&self) -> Vec<u8> {
-    //     self.bytes
-    // }
-    // pub fn get_instructions(&self) -> Vec<Instruction> {
-    //     self.instructions
-    // }
-    // pub fn get_bitness(&self) -> u32 {
-    //     self.bitness
-    // }
-    // pub fn get_start_address(&self) -> u64 {
-    //     self.start_addr
-    // }
-    pub fn is_known_address(&self, addr: u64) -> bool {
-        self.known_addr_table.contains(&addr)
+    pub fn is_cf_critical(&self, addr: u64) -> bool {
+        if let Some(tr) = &self.trace_results {
+            return tr.cf_addr_map.contains(&addr);
+        }
+        true // If there is no trace data, all can be critical!
     }
-    pub fn is_branch_target(&self, addr: u64) -> bool {
-        self.branch_targets.contains(&addr)
-    }
-
-    // pub fn is_affecting_cf(&self, inst: &Instruction) -> Result<bool, DeoptimizerError> {
-    //     // Check if the instruction exists in self.code
-    //     if self.addr_map.get(&inst.ip()).is_none() {
-    //         return Err(DeoptimizerError::InstructionNotFound);
-    //     }
-    //
-    //     let mut rflags = RflagsBits::NONE;
-    //     let m_rflags = inst.rflags_modified();
-    //     if m_rflags == RflagsBits::NONE {
-    //         return Ok(false);
-    //     }
-    //
-    //     let mut cursor = inst.clone();
-    //     while self.addr_map.get(&cursor.next_ip()).is_some() {
-    //         cursor = *self.addr_map.get(&cursor.next_ip()).unwrap();
-    //         rflags = rflags | cursor.rflags_modified();
-    //         if (cursor.rflags_read() & m_rflags) > 0 {
-    //             break;
-    //         }
-    //         if (m_rflags & rflags) == m_rflags {
-    //             return Ok(false);
-    //         }
-    //     }
-    //
-    //     Ok(true)
-    // }
 }
 
 pub struct Deoptimizer {
@@ -234,8 +196,8 @@ impl Deoptimizer {
             let tr = tracer::trace(bytes, bitness, start_addr)?;
             info!("Done tracing!");
             info!("Found {} possible strings.", tr.possible_strings.len());
-            debug!("Total coverage: {}", tr.total_coverage);
-            debug!("Coverage without strings: {}", tr.coverage_whitout_strings);
+            info!("Total coverage: {}", tr.total_coverage);
+            info!("Coverage without strings: {}", tr.coverage_whitout_strings);
             for o in 0..bytes.len() {
                 if !tr.active_offsets.contains(&(o as u64 + start_addr)) {
                     self.skipped_offsets.insert(o as u64 + start_addr, true);
@@ -252,45 +214,51 @@ impl Deoptimizer {
         }
 
         let mut inst = Instruction::default();
-        let mut known_addr_table = Vec::new();
-        let mut branch_targets = Vec::new();
+        let mut addr_map = HashMap::new();
+        let mut branch_lookup_table = HashMap::new();
         let mut instructions = Vec::new();
-        let mut addr_map: HashMap<u64, Instruction> = HashMap::new();
         let mut offset = 0;
         while decoder.can_decode() {
             decoder.decode_out(&mut inst);
+
             if self.skipped_offsets.contains_key(&offset) {
                 let mut db = Instruction::with_declare_byte_1(bytes[offset as usize]);
                 db.set_ip(inst.ip());
                 db.set_code(Code::DeclareByte);
                 // Push to known address table
-                known_addr_table.push(db.ip());
-                addr_map.insert(db.ip(), db);
+                // known_addr_table.push(db.ip());
                 instructions.push(db);
                 offset += 1;
                 continue;
             }
-
-            if inst.is_invalid() {
-                warn!("Found invalid instruction at: 0x{:016X}", inst.ip());
-                if !self.allow_invalid {
-                    return Err(DeoptimizerError::InvalidInstruction);
-                }
-            }
             // Push to known address table
-            known_addr_table.push(inst.ip());
-            addr_map.insert(inst.ip(), inst);
+            // known_addr_table.push(inst.ip());
             instructions.push(inst);
-
-            let bt = get_branch_target(&inst).unwrap_or(0);
-            if bt != 0 {
-                branch_targets.push(bt);
-            }
             offset += inst.len() as u64;
+
+            match inst.flow_control() {
+                FlowControl::Exception => {
+                    warn!("Found invalid instruction at: 0x{:016X}", inst.ip());
+                    if !self.allow_invalid {
+                        return Err(DeoptimizerError::InvalidInstruction);
+                    }
+                }
+                FlowControl::Call
+                | FlowControl::ConditionalBranch
+                | FlowControl::UnconditionalBranch => match get_branch_target(&inst) {
+                    Ok(bt) => {
+                        let _ = branch_lookup_table.insert(inst.ip(), bt);
+                    }
+                    Err(e) => error!("0x{:016X}:\t{} ({e})", inst.ip(), inst),
+                },
+                _ => {}
+            }
+
+            addr_map.insert(inst.ip(), inst);
         }
 
-        for bt in branch_targets.iter() {
-            if !known_addr_table.contains(bt) {
+        for (_, bt) in branch_lookup_table.iter() {
+            if !addr_map.contains_key(bt) {
                 warn!(
                     "Branch target 0x{:016X} is outside the known address sapce!",
                     bt
@@ -303,9 +271,9 @@ impl Deoptimizer {
             bytes: bytes.to_vec(),
             start_addr,
             file_type: FileType::Shellcode,
+            addr_map,
             instructions,
-            known_addr_table,
-            branch_targets,
+            branch_lookup_table,
             trace_results,
         })
     }
@@ -316,12 +284,12 @@ impl Deoptimizer {
         freq: f32,
         transforms: AvailableTransforms,
     ) -> Result<Vec<Instruction>, DeoptimizerError> {
-        if inst.is_invalid() {
+        if inst.flow_control() == FlowControl::Exception {
             // We can skip invalid instructions (including hardcoded data
             return Err(DeoptimizerError::InvalidInstruction);
         }
         // We can bailout if there is no operand
-        if inst.op_count() == 0 || inst.code() == Code::DeclareByte {
+        if inst.op_count() == 0 {
             return Err(DeoptimizerError::AllTransformsFailed);
         }
 
@@ -379,15 +347,19 @@ impl Deoptimizer {
     }
 
     pub fn deoptimize(&mut self, acode: &AnalyzedCode) -> Result<Vec<u8>, DeoptimizerError> {
-        let mut result: Vec<Instruction> = Vec::new(); // deoptimized code
-        let mut ip_to_index_table: HashMap<u64, usize> = HashMap::new();
-        let mut index_to_index_table: HashMap<usize, usize> = HashMap::new();
-        // let mut new_ip: u64 = acode.start_addr;
+        let mut result: Vec<Instruction> = Vec::new(); // final deoptimized code
+        let mut a2i_fix_table = HashMap::new();
+        let mut i2i_fix_table = HashMap::new();
+
         for inst in acode.instructions.clone() {
-            if acode.is_branch_target(inst.ip()) {
-                ip_to_index_table.insert(inst.ip(), result.len());
+            a2i_fix_table.insert(inst.ip(), result.len());
+
+            let mut trs = self.transforms;
+            if acode.is_cf_critical(inst.ip()) {
+                trs.remove(AvailableTransforms::OffsetMutation)
             }
-            match Deoptimizer::apply_transform(acode.bitness, &inst, self.freq, self.transforms) {
+
+            match Deoptimizer::apply_transform(acode.bitness, &inst, self.freq, trs) {
                 Ok(dinst) => {
                     result = [result, dinst.clone()].concat();
                     print_inst_diff(&inst, dinst);
@@ -397,17 +369,17 @@ impl Deoptimizer {
                     trace!("TransformError: {e} => [{}]", inst);
                 }
             }
+
             result.push(inst);
             print_inst_diff(&inst, [inst].to_vec());
         }
         adjust_instruction_addrs(&mut result, acode.start_addr);
-
         for (i, inst) in result.iter().enumerate() {
             let bt = get_branch_target(inst).unwrap_or(0);
             if bt != 0 {
-                if let Some(idx) = ip_to_index_table.get(&bt) {
-                    index_to_index_table.insert(i, *idx);
-                    trace!("{:016X} {} >> {}", inst.ip(), inst, result[*idx]);
+                if let Some(idx) = a2i_fix_table.get(&bt) {
+                    i2i_fix_table.insert(i, *idx);
+                    // trace!("{:016X} {} >> {}", inst.ip(), inst, result[*idx]);
                 } else {
                     error!("Could not find branch fix entry for: {}", inst);
                 }
@@ -417,26 +389,16 @@ impl Deoptimizer {
         let mut fin_address = result.last().unwrap().ip();
         loop {
             trace!("[============ ADJUSTING BRANCH TARGETS ===========]");
-            for i in 0..result.len() {
-                if index_to_index_table.contains_key(&i) {
-                    if let Some(idx) = index_to_index_table.get(&i) {
-                        trace!(
-                            "BT: 0x{:X} {} -> 0x{:X} {}",
-                            result[i].ip(),
-                            result[i],
-                            result[*idx].ip(),
-                            result[*idx]
-                        );
-                        result[i] = set_branch_target(
-                            &result[i].clone(),
-                            result[*idx].ip(),
-                            acode.bitness,
-                        )?;
-                        adjust_instruction_addrs(&mut result, acode.start_addr);
-                    } else {
-                        error!("Could not find branch fix entry for: {}", result[i]);
-                    }
-                }
+            for (k, v) in i2i_fix_table.clone().into_iter() {
+                trace!(
+                    "0x{:016X}:\t{}\t->\t0x{:016X}:\t{}",
+                    result[k].ip(),
+                    result[k],
+                    result[v].ip(),
+                    result[v]
+                );
+                result[k] = set_branch_target(&result[k].clone(), result[v].ip(), acode.bitness)?;
+                adjust_instruction_addrs(&mut result, acode.start_addr);
             }
             if result.last().unwrap().ip() == fin_address {
                 break;
@@ -444,6 +406,7 @@ impl Deoptimizer {
                 fin_address = result.last().unwrap().ip();
             }
         }
+
         adjust_instruction_addrs(&mut result, acode.start_addr);
         let mut encoder = Encoder::new(acode.bitness);
         let mut buffer = Vec::new();
@@ -467,3 +430,95 @@ impl Deoptimizer {
         Ok(buffer)
     }
 }
+
+//     pub fn deoptimize(&mut self, acode: &AnalyzedCode) -> Result<Vec<u8>, DeoptimizerError> {
+//         let mut result: Vec<Instruction> = Vec::new(); // deoptimized code
+//         let mut ip_to_index_table: HashMap<u64, usize> = HashMap::new();
+//         let mut index_to_index_table: HashMap<usize, usize> = HashMap::new();
+//         // let mut new_ip: u64 = acode.start_addr;
+//         for inst in acode.instructions.clone() {
+//             if acode.is_branch_target(inst.ip()) {
+//                 ip_to_index_table.insert(inst.ip(), result.len());
+//             }
+//             match Deoptimizer::apply_transform(acode.bitness, &inst, self.freq, self.transforms) {
+//                 Ok(dinst) => {
+//                     result = [result, dinst.clone()].concat();
+//                     print_inst_diff(&inst, dinst);
+//                     continue;
+//                 }
+//                 Err(e) => {
+//                     trace!("TransformError: {e} => [{}]", inst);
+//                 }
+//             }
+//             result.push(inst);
+//             print_inst_diff(&inst, [inst].to_vec());
+//         }
+//         adjust_instruction_addrs(&mut result, acode.start_addr);
+//
+//         for (i, inst) in result.iter().enumerate() {
+//             let bt = get_branch_target(inst).unwrap_or(0);
+//             if bt != 0 {
+//                 if let Some(idx) = ip_to_index_table.get(&bt) {
+//                     index_to_index_table.insert(i, *idx);
+//                     trace!("{:016X} {} >> {}", inst.ip(), inst, result[*idx]);
+//                 } else {
+//                     error!("Could not find branch fix entry for: {}", inst);
+//                 }
+//             }
+//         }
+//
+//         dbg!(index_to_index_table.clone());
+//
+//         let mut fin_address = result.last().unwrap().ip();
+//         loop {
+//             trace!("[============ ADJUSTING BRANCH TARGETS ===========]");
+//             for i in 0..result.len() {
+//                 if index_to_index_table.contains_key(&i) {
+//                     if let Some(idx) = index_to_index_table.get(&i) {
+//                         trace!(
+//                             "BT: 0x{:X} {} -> 0x{:X} {}",
+//                             result[i].ip(),
+//                             result[i],
+//                             result[*idx].ip(),
+//                             result[*idx]
+//                         );
+//                         result[i] = set_branch_target(
+//                             &result[i].clone(),
+//                             result[*idx].ip(),
+//                             acode.bitness,
+//                         )?;
+//                         adjust_instruction_addrs(&mut result, acode.start_addr);
+//                     } else {
+//                         error!("Could not find branch fix entry for: {}", result[i]);
+//                     }
+//                 }
+//             }
+//             if result.last().unwrap().ip() == fin_address {
+//                 break;
+//             } else {
+//                 fin_address = result.last().unwrap().ip();
+//             }
+//         }
+//         adjust_instruction_addrs(&mut result, acode.start_addr);
+//         let mut encoder = Encoder::new(acode.bitness);
+//         let mut buffer = Vec::new();
+//         for inst in result.clone() {
+//             if inst.code() == Code::DeclareByte {
+//                 buffer.push(inst.get_declare_byte_value(0));
+//                 continue;
+//             }
+//             match encoder.encode(&inst, inst.ip()) {
+//                 Ok(_) => buffer = [buffer, encoder.take_buffer()].concat(),
+//                 Err(e) => {
+//                     error!(
+//                         "Encoding failed for -> {} [OPK0: {:?}]",
+//                         inst,
+//                         inst.op0_kind()
+//                     );
+//                     return Err(DeoptimizerError::EncodingFail(e));
+//                 }
+//             }
+//         }
+//         Ok(buffer)
+//     }
+// }

@@ -55,7 +55,7 @@ fn main() {
     info!("Input file size: {}", file.len());
     let mut deopt = x86_64::Deoptimizer::new();
     deopt.freq = opts.freq;
-    deopt.trace = opts.trace;
+    deopt.trace = !opts.no_trace;
     deopt.allow_invalid = opts.allow_invalid;
     deopt.set_skipped_offsets(opts.skip_offsets);
     if let Err(e) = deopt.set_transform_gadgets(opts.transforms) {

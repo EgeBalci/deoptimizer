@@ -624,7 +624,7 @@ mod tests {
             Ok(tr) => {
                 info!("Total Coverage: {}", tr.total_coverage);
                 info!("Coverage Whitout Strings: {}", tr.coverage_whitout_strings);
-                tr.print_dead_code();
+                // tr.print_dead_code();
             }
             Err(e) => {
                 error!("{}", e);
@@ -636,7 +636,7 @@ mod tests {
             Ok(tr) => {
                 info!("Total Coverage: {}", tr.total_coverage);
                 info!("Coverage Whitout Strings: {}", tr.coverage_whitout_strings);
-                tr.print_dead_code();
+                // tr.print_dead_code();
             }
             Err(e) => {
                 error!("{}", e);

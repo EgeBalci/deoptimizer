@@ -61,33 +61,6 @@ pub fn get_instruction_bytes(bitness: u32, insts: Vec<Instruction>) -> Result<Ve
     Ok(buffer)
 }
 
-// pub fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-//     haystack
-//         .windows(needle.len())
-//         .position(|window| window == needle)
-// }
-//
-// pub fn generate_random_instructions(size: usize) -> Vec<u8> {
-//     let small_mnemonics = [
-//         0x90, // nop
-//         0xc3, // ret
-//         0xf1, // int1
-//         0xf4, // hlt
-//         0xf5, // cmc
-//         0xf8, // clc
-//         0xfa, // cli
-//         0xf9, // stc
-//         0xfb, // sti
-//         0xfc, // cld
-//     ]
-//     .to_vec();
-//     let mut output = Vec::new();
-//     for _ in 0..size {
-//         output.push(*small_mnemonics.choose(&mut rand::thread_rng()).unwrap() as u8)
-//     }
-//     output
-// }
-
 pub fn print_inst_diff(inst: &Instruction, dinst: Vec<Instruction>) {
     if log::max_level() <= log::Level::Info || dinst.is_empty() {
         return;
@@ -168,33 +141,6 @@ pub fn transpose_fixed_register_operand(inst: &mut Instruction) -> Result<(), De
     }
     Err(DeoptimizerError::TransposeFailed)
 }
-
-// pub fn get_aprx_immediate_size(imm: u64) -> OpKind {
-//     if imm <= u8::MAX as u64 {
-//         return OpKind::Immediate8;
-//     } else if imm > u8::MAX as u64 && imm <= u16::MAX as u64 {
-//         return OpKind::Immediate16;
-//     } else if imm > u16::MAX as u64 && imm <= u32::MAX as u64 {
-//         return OpKind::Immediate32;
-//     } else if imm > u32::MAX as u64 && imm <= u64::MAX {
-//         return OpKind::Immediate64;
-//     } else {
-//         return OpKind::Immediate8to64;
-//     }
-// }
-
-// pub fn get_immediate_indexes(inst: &Instruction) -> Option<Vec<u32>> {
-//     let mut indexes = Vec::new();
-//     for i in 0..inst.op_count() {
-//         if is_immediate_operand(inst.op_kind(i)) {
-//             indexes.push(i);
-//         }
-//     }
-//     if indexes.len() == 0 {
-//         return None;
-//     }
-//     Some(indexes)
-// }
 
 pub fn get_stack_pointer_register(bitness: u32) -> Result<Register, DeoptimizerError> {
     Ok(match bitness {
@@ -333,7 +279,7 @@ pub fn get_branch_target(inst: &Instruction) -> Result<u64, DeoptimizerError> {
     Ok(match inst.op0_kind() {
         OpKind::FarBranch32 => inst.far_branch32() as u64,
         OpKind::FarBranch16 => inst.far_branch16() as u64,
-        _ => return Err(DeoptimizerError::BracnhTargetNotFound),
+        _ => return Err(DeoptimizerError::BranchTargetNotFound),
     })
 }
 

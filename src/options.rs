@@ -31,7 +31,7 @@ pub enum ArgParseError {
 #[derive(Parser, PartialEq, Debug)]
 #[command(name = "Deoptimizer")]
 #[command(version = VERSION)]
-#[command(about = "Machine code deoptimizer.", long_about = None)]
+#[command(about = "Machine code de-optimizer.", long_about = None)]
 pub struct Options {
     /// Target architecture (x86/arm).
     #[arg(long, short = 'a', default_value_t = String::from("x86"))]
@@ -65,9 +65,9 @@ pub struct Options {
     #[arg(long, value_parser=parse_offset, num_args = 1.., value_delimiter = ',')]
     pub skip_offsets: Vec<(u64, u64)>,
 
-    /// Auto-skip dead-code and strings by control flow tracing.
-    #[arg(long, short = 'T')]
-    pub trace: bool,
+    /// Do not perform conntrol flow tracing on the given binary.
+    #[arg(long)]
+    pub no_trace: bool,
 
     /// Total number of deoptimization cycles.
     #[arg(long, short = 'c', default_value_t = 1)]
@@ -160,7 +160,7 @@ pub fn print_summary(opts: &Options) {
     }
 
     let freq_str = format!("%{:.4}", opts.freq * 100.0);
-    let trace_str = format!("{:?}", opts.trace);
+    let trace_str = format!("{:?}", !opts.no_trace);
     println!(
         "\n[ {} {} {} ]",
         "#".repeat(wspace / 2 + 2).yellow().bold(),
@@ -218,7 +218,7 @@ pub fn print_summary(opts: &Options) {
     println!(
         "[ {} {}{}]",
         "Auto Trace:  ".blue().bold(),
-        opts.trace,
+        !opts.no_trace,
         " ".repeat(wspace - trace_str.len())
     );
     println!();
