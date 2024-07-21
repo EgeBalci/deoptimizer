@@ -5,7 +5,7 @@ CROSS=cross build --release
 default:
 	${BUILD}
 static:
-	${FLAGS} ${BUILD}
+	${FLAGS} ${BUILD} --target x86_64-unknown-linux-musl
 nightly:
 	${NIGHTLY_FLAGS} ${BUILD}
 windows:
